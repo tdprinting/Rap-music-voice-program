@@ -90,6 +90,9 @@ class AudioEngine:
         self._click_lo = make_click(self.sr, False)
         self._click_play = None            # (array, index)
         self.stop_at = None
+        self.rec_end = None                # punch-out point (samples) or None
+        self._ring = np.zeros((int(4 * self.sr), 2), np.float32)
+        self._ring_pos = 0
 
     @property
     def available(self):
@@ -100,6 +103,8 @@ class AudioEngine:
                   latency_comp_ms=None):
         if sr:
             self.sr = int(sr)
+            self._ring = np.zeros((int(4 * self.sr), 2), np.float32)
+            self._ring_pos = 0
             self._click_hi = make_click(self.sr, True)
             self._click_lo = make_click(self.sr, False)
         if blocksize:
@@ -112,6 +117,32 @@ class AudioEngine:
             self.input_channel = int(input_channel)
         if latency_comp_ms is not None:
             self.latency_comp_ms = float(latency_comp_ms)
+
+    def _ring_write(self, out):
+        n = len(out)
+        r = self._ring
+        if n >= len(r):
+            r[:] = out[-len(r):]
+            self._ring_pos = 0
+            return
+        a = self._ring_pos
+        b = a + n
+        if b <= len(r):
+            r[a:b] = out
+        else:
+            k = len(r) - a
+            r[a:] = out[:k]
+            r[: n - k] = out[k:]
+        self._ring_pos = b % len(r)
+
+    def recent_output(self, n):
+        """Last n samples sent to the speakers (for the analyzer)."""
+        r = self._ring
+        n = min(n, len(r))
+        a = (self._ring_pos - n) % len(r)
+        if a + n <= len(r):
+            return r[a:a + n].copy()
+        return np.vstack([r[a:], r[: (a + n) % len(r)]])
 
     def set_tracks(self, tracks):
         """tracks: list of dict(id, off, data(n,2), volume_db, pan, audible)."""
@@ -214,11 +245,15 @@ class AudioEngine:
         self._open(need_input=self.monitor)
         self.playing = True
 
-    def record(self, pos, count_in_bars=0):
+    def record(self, pos, count_in_bars=0, punch_out=None, preroll=None):
+        """Record from pos. punch_out = stop capturing there (auto punch). preroll = samples of
+        playback before pos (used instead of a count-in for punch-ins)."""
         self.rec_blocks = []
         self.rec_takes = []
         self.rec_start = int(pos)
-        pre = int(count_in_bars * self.beats_per_bar * 60.0 / max(self.bpm, 1) * self.sr)
+        self.rec_end = int(punch_out) if punch_out else None
+        pre = int(preroll) if preroll is not None else \
+            int(count_in_bars * self.beats_per_bar * 60.0 / max(self.bpm, 1) * self.sr)
         self.pos = int(pos) - pre
         self._open(need_input=True)
         self.recording = True
@@ -294,9 +329,12 @@ class AudioEngine:
             ch = min(self.input_channel, inp.shape[1] - 1)
             mono = inp[:, ch].copy()
             p0 = self.pos
-            if p0 + frames > self.rec_start:
+            end = self.rec_end if self.rec_end is not None else p0 + frames + 1
+            if p0 + frames > self.rec_start and p0 < end:
                 cut = max(0, self.rec_start - p0)
-                self.rec_blocks.append(mono[cut:])
+                stop = min(frames, end - p0)
+                if stop > cut:
+                    self.rec_blocks.append(mono[cut:stop])
         self.pos += frames
         if self.loop_enabled and self.loop and self.pos >= self.loop[1] and self.loop[1] > self.loop[0]:
             if self.recording:
@@ -319,7 +357,8 @@ class AudioEngine:
         np.clip(out, -1, 1, out=out)
         outdata[:] = out
         self.peak_out = np.max(np.abs(out), axis=0)
-        self._advance(frames, None if len(self._streams) > 1 else None)
+        self._ring_write(out)
+        self._advance(frames, None)
 
     def _in_cb(self, indata, frames, time_info, status):
         ch = min(self.input_channel, indata.shape[1] - 1)
@@ -327,9 +366,12 @@ class AudioEngine:
         self.peak_in = float(np.max(np.abs(indata[:, ch]))) if frames else 0.0
         if self.recording and self.playing:
             p0 = self.pos
-            if p0 + frames > self.rec_start:
+            end = self.rec_end if self.rec_end is not None else p0 + frames + 1
+            if p0 + frames > self.rec_start and p0 < end:
                 cut = max(0, self.rec_start - p0)
-                self.rec_blocks.append(indata[cut:, ch].copy())
+                stop = min(frames, end - p0)
+                if stop > cut:
+                    self.rec_blocks.append(indata[cut:stop, ch].copy())
 
     def _duplex_cb(self, indata, outdata, frames, time_info, status):
         ch = min(self.input_channel, indata.shape[1] - 1)
@@ -344,6 +386,7 @@ class AudioEngine:
         np.clip(out, -1, 1, out=out)
         outdata[:] = out
         self.peak_out = np.max(np.abs(out), axis=0)
+        self._ring_write(out)
         self._advance(frames, indata)
 
     # ------------------------------------------------------------ input meter only

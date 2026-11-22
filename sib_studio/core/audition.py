@@ -173,12 +173,12 @@ def export_session(project, out_dir, mode="both", include_breath_markers=False, 
     def safe(s):
         return "".join(ch if ch.isalnum() or ch in "-_ " else "_" for ch in s).strip() or "track"
 
-    for t in project.tracks:
+    for t in project.mix_tracks():
         hue = int(int(t.color.lstrip("#")[:2], 16) / 255 * 360) if t.color.startswith("#") else -1
         if mode in ("processed", "both"):
             if progress:
                 progress(f"Rendering {t.name}")
-            off, a = project.render_track(t)
+            off, a = project.track_audio(t)
             if len(a):
                 gl, gr = dsp.pan_gains(t.pan)  # pan is baked into the printed file
                 a = a * np.array([gl, gr], np.float32)

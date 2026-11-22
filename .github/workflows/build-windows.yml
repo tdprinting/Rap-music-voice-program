@@ -32,7 +32,7 @@ jobs:
       - name: Build exe
         run: >
           pyinstaller --noconfirm --clean --windowed --name "SIB Studio Mixer"
-          --icon assets\sib.ico --add-data "assets;assets"
+          --icon assets\sib.ico --add-data "assets;assets" --add-data "sib_studio/data;sib_studio/data"
           --collect-all _soundfile_data --collect-all _sounddevice_data
           --collect-submodules scipy.signal --collect-submodules scipy.ndimage
           run_sib.py

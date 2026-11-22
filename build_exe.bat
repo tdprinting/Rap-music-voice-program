@@ -7,6 +7,7 @@ if not exist ".venv\Scripts\python.exe" call "Install SIB Studio.bat"
   --name "SIB Studio Mixer" ^
   --icon assets\sib.ico ^
   --add-data "assets;assets" ^
+  --add-data "sib_studio/data;sib_studio/data" ^
   --collect-all _soundfile_data ^
   --collect-all _sounddevice_data ^
   --collect-submodules scipy.signal ^

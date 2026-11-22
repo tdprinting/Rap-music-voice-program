@@ -1,0 +1,3 @@
+word_freq.txt.gz: English word frequency ranks from FrequencyWords by Hermit Dave
+(https://github.com/hermitdave/FrequencyWords), built from OpenSubtitles 2018.
+License: CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/).

@@ -171,6 +171,8 @@ class ParamEditor(QWidget):
         form.setContentsMargins(4, 4, 4, 4)
         self.controls = {}
         for prm in effect_def.params:
+            if prm.kind == "hidden":
+                continue
             c = ParamControl(prm, params.get(prm.key, prm.default))
             c.changed.connect(self.changed)
             lbl = QLabel(prm.label)

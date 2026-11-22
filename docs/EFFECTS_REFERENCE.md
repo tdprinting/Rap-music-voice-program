@@ -1,7 +1,8 @@
 # SIB Studio Mixer — Effects & Settings Reference
 
-Every effect below can be added to any track from the **FX Rack** (`+ Add effect`), reordered by dragging, toggled with its checkbox,
-and applied permanently to a selection with **Apply this effect to selection**. Hover any control in the app for the same tips.
+Every effect below can be added to any track (or the master bus, or a Reverb/Delay send bus) from the **FX Rack**
+(`+ Add effect`), reordered by dragging, toggled with its checkbox, and applied permanently to a selection with
+**Apply this effect to selection**. Hover any control in the app for the same tips.
 
 Effects marked *(sidechain)* belong on the **beat** track — they listen to the vocals.
 
@@ -162,6 +163,65 @@ Simple filter - good for intros, telephone sections and beat drops.
 | Q | 0.707 | 0.1 – 20 |  |
 | Steepness | 2 | 2, 4, 8 |  |
 
+### Graphic EQ (10-band)
+
+Classic 10-band graphic EQ (31 Hz - 16 kHz).
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| 31 Hz | 0 dB | -15 – 15 dB |  |
+| 63 Hz | 0 dB | -15 – 15 dB |  |
+| 125 Hz | 0 dB | -15 – 15 dB |  |
+| 250 Hz | 0 dB | -15 – 15 dB |  |
+| 500 Hz | 0 dB | -15 – 15 dB |  |
+| 1k Hz | 0 dB | -15 – 15 dB |  |
+| 2k Hz | 0 dB | -15 – 15 dB |  |
+| 4k Hz | 0 dB | -15 – 15 dB |  |
+| 8k Hz | 0 dB | -15 – 15 dB |  |
+| 16k Hz | 0 dB | -15 – 15 dB |  |
+| Band width (Q) | 1.4 | 0.5 – 4 |  |
+
+### Match EQ (reference)
+
+Moves the tone of this track toward a reference (set it from Mix > Match EQ to reference).
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| Amount | 70 % | 0 – 100 % | How far to move toward the reference's tone. 50-80% is usually plenty. |
+
+### Vocal Enhancer
+
+One-knob clarity: removes boom and adds presence (like Audition's Vocal Enhancer).
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| Voice | low voice | low voice, high voice, music / beat |  |
+| Amount | 60 % | 0 – 100 % |  |
+
+### Bass & Treble
+
+Simple tone controls.
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| Bass | 0 dB | -15 – 15 dB |  |
+| Bass freq | 120 Hz | 40 – 500 Hz |  |
+| Treble | 0 dB | -15 – 15 dB |  |
+| Treble freq | 6000 Hz | 1500 – 16000 Hz |  |
+
+### Notch Filter
+
+Surgically removes whistles, ringing or a resonant room tone.
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| Frequency 1 | 1000 Hz | 20 – 20000 Hz |  |
+| Notch 2 on | off | on / off |  |
+| Frequency 2 | 2000 Hz | 20 – 20000 Hz |  |
+| Notch 3 on | off | on / off |  |
+| Frequency 3 | 4000 Hz | 20 – 20000 Hz |  |
+| Narrowness (Q) | 12 | 1 – 60 |  |
+
 ## Dynamics
 
 ### Noise Gate / Expander
@@ -247,6 +307,42 @@ Brick-wall limiter that stops clipping.
 | Release | 60 ms | 5 – 500 ms |  |
 | Look-ahead | 3 ms | 0.5 – 10 ms |  |
 
+### Dynamic EQ (harshness tamer)
+
+Cuts a frequency only when it gets too loud - keeps the vocal bright but never harsh.
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| Frequency | 3000 Hz | 100 – 12000 Hz | 2.5-5 kHz tames harsh/shouty words; 200-400 Hz tames boomy ones. |
+| Width (Q) | 1.5 | 0.3 – 8 |  |
+| Threshold | -30 dB | -60 – 0 dB |  |
+| Max cut | 6 dB | 0 – 18 dB |  |
+| Attack | 5 ms | 0.5 – 100 ms |  |
+| Release | 80 ms | 10 – 1000 ms |  |
+
+### Transient Shaper (punch)
+
+Adds punch to the start of words or tightens their tails.
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| Attack | 4 dB | -12 – 12 dB | More = punchier consonants. |
+| Sustain | 0 dB | -12 – 12 dB | Less = tighter, drier vocal. |
+| Speed | 1 | 0.25 – 4 |  |
+
+### Tube Compressor
+
+Warm compression with tube colour (like Audition's Tube-Modeled Compressor).
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| Threshold | -18 dB | -50 – 0 dB |  |
+| Ratio | 3 | 1 – 10 |  |
+| Attack | 15 ms | 0.5 – 100 ms |  |
+| Release | 120 ms | 10 – 1000 ms |  |
+| Tube drive | 6 dB | 0 – 24 dB |  |
+| Mix | 100 % | 0 – 100 % |  |
+
 ## Color
 
 ### Saturation
@@ -292,6 +388,16 @@ Phone / megaphone vocal for intros and hooks.
 | Drive | 6 dB | 0 – 24 dB |  |
 | Mix | 100 % | 0 – 100 % |  |
 
+### 808 / Bass Enhancer
+
+Adds harmonics to 808s and sub bass so they're heard on phones and laptop speakers.
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| Bass below | 100 Hz | 40 – 250 Hz |  |
+| Drive | 12 dB | 0 – 30 dB |  |
+| Amount | 30 % | 0 – 100 % |  |
+
 ## Space
 
 ### Delay / Echo
@@ -308,6 +414,7 @@ Tempo-synced echoes, locked to the beat's BPM.
 | Ping-pong | on | on / off |  |
 | Low cut | 300 Hz | 20 – 2000 Hz |  |
 | High cut | 6000 Hz | 1000 – 20000 Hz |  |
+| Wet only (for send buses) | off | on / off |  |
 
 ### Reverb
 
@@ -325,6 +432,7 @@ Plate/room/hall space for the vocal.
 | Mix | 12 % | 0 – 100 % |  |
 | Low cut | 250 Hz | 20 – 1000 Hz |  |
 | High cut | 9000 Hz | 2000 – 20000 Hz |  |
+| Wet only (for send buses) | off | on / off |  |
 
 ### Chorus
 
@@ -344,6 +452,45 @@ Narrows or widens the stereo image.
 | Setting | Default | Range | What it does |
 |---|---|---|---|
 | Width | 1 | 0 – 2 | 0 = mono, 1 = unchanged, 2 = extra wide. |
+
+### Phaser
+
+Sweeping, swirling phase effect - spacey ad-libs and intros.
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| Rate | 0.5 Hz | 0.05 – 8 Hz |  |
+| Depth | 0.8 | 0 – 1 |  |
+| Stages | 4 | 2 – 12 |  |
+| Low freq | 300 Hz | 50 – 2000 Hz |  |
+| High freq | 3000 Hz | 500 – 12000 Hz |  |
+| Feedback | 0.3 | 0 – 0.9 |  |
+| Mix | 50 % | 0 – 100 % |  |
+
+### Flanger
+
+Jet-plane whoosh.
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| Rate | 0.25 Hz | 0.02 – 5 Hz |  |
+| Depth | 2 ms | 0.1 – 10 ms |  |
+| Delay | 1.5 ms | 0.1 – 10 ms |  |
+| Feedback | 0.4 | 0 – 0.9 |  |
+| Mix | 50 % | 0 – 100 % |  |
+
+### Tremolo / Gate Stutter / Auto-Pan
+
+Rhythmic volume chops or side-to-side movement locked to the beat.
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| Mode | tremolo | tremolo, auto-pan |  |
+| Shape | square | sine, triangle, square | Square + sync = the trap 'gate stutter' chop. |
+| Sync to BPM | on | on / off |  |
+| Note | 1/16 | 12 options |  |
+| Rate (unsynced) | 4 Hz | 0.1 – 20 Hz |  |
+| Depth | 0.8 | 0 – 1 |  |
 
 ## Mix
 
@@ -371,6 +518,15 @@ Ducks the whole track under the vocals.
 | Vocal threshold | -35 dB | -70 – -5 dB |  |
 | Attack | 5 ms | 0.5 – 100 ms |  |
 | Release | 200 ms | 10 – 2000 ms |  |
+
+### Vocal Remover (beat)
+
+Cancels a centred vocal in a beat that still has one (keeps the 808 and kick).
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| Keep bass below | 150 Hz | 40 – 400 Hz |  |
+| Amount | 100 % | 0 – 100 % |  |
 
 ## Utility
 
@@ -403,6 +559,12 @@ Polarity, mono, channel swap, DC removal.
 | Swap L/R | off | on / off |  |
 | Remove DC offset | on | on / off |  |
 
+### Audition effect (imported)
+
+An Adobe Audition effect with no SIB equivalent yet. Kept (bypassed) so the setting isn't lost.
+
+*(no adjustable settings)*
+
 ## Master
 
 ### Mastering (glue + loudness)
@@ -419,3 +581,13 @@ Final polish: glue compression, tone, width and loud-but-clean limiting.
 | Width | 1 | 0.5 – 1.5 |  |
 | Loudness target | -10 LUFS | -20 – -6 LUFS | -14 = streaming normalised, -9 to -11 = loud rap master. |
 | Ceiling | -1 dBTP | -3 – 0 dBTP |  |
+
+### Soft Clipper (loudness)
+
+Shaves peaks before the limiter for louder, punchier rap masters (and 808s that hit harder).
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| Drive | 3 dB | 0 – 18 dB |  |
+| Ceiling | -0.5 dBFS | -6 – 0 dBFS |  |
+| Mix | 100 % | 0 – 100 % |  |

@@ -13,12 +13,37 @@ import numpy as np
 
 from . import dsp
 from .audio_io import load_audio, save_audio, to_stereo
-from .effects import process_chain, sanitize_instance, REGISTRY
+from .effects import process_chain, sanitize_instance, REGISTRY, new_instance
 from . import presets
 
 PROJECT_EXT = ".sibproj"
+SEND_NAMES = ("reverb", "delay")
+
+
+def default_sends():
+    return {
+        "reverb": dict(fx=[new_instance("reverb", mix=100.0, wet_only=True, decay_s=1.6, predelay_ms=30.0,
+                                        width=1.2)], volume_db=-4.0, mute=False),
+        "delay": dict(fx=[new_instance("delay", mix=100.0, wet_only=True, feedback=30.0, division="1/4")],
+                      volume_db=-6.0, mute=False),
+    }
+
+
+def default_lyrics():
+    return dict(text="", start_bar=1.0, bars_per_line=1.0, timings={}, section_bars={}, rhyme_mode="end",
+                title="", artist="", font_size=34)
 FX_TAIL_S = 3.0
 TRACK_COLORS = ["#e04848", "#3f8cff", "#f0b429", "#2ec4b6", "#b06cff", "#ff7aa8", "#7bd389", "#ff9f43"]
+
+
+def _json_default(o):
+    if isinstance(o, np.integer):
+        return int(o)
+    if isinstance(o, np.floating):
+        return float(o)
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    return str(o)
 
 
 def uid():
@@ -78,6 +103,10 @@ class Track:
     id: str = field(default_factory=uid)
     height: int = 96
     breath_regions: list = field(default_factory=list)   # reviewed breaths [(start,end,enabled)]
+    sends: dict = field(default_factory=lambda: {"reverb": -60.0, "delay": -60.0})  # dB, <= -59.5 = off
+    automation: list = field(default_factory=list)        # volume envelope [[sample, dB], ...]
+    show_automation: bool = False
+    throws: list = field(default_factory=list)            # [{start,end,kind,amount_db,division}]
 
     def to_dict(self):
         d = asdict(self)
@@ -163,6 +192,10 @@ class Project:
         self.a4 = 440.0
         self.analysis: dict = {}
         self.loop = None            # (start, end) samples
+        self.lyrics: dict = default_lyrics()
+        self.sends: dict = default_sends()
+        self._final_cache: dict = {}
+        self._send_cache: dict = {}
         self.pool = AudioPool(self)
         self.saved_path = None
         self._render_cache: dict = {}
@@ -195,6 +228,12 @@ class Project:
     def vocal_tracks(self):
         return [t for t in self.tracks if t.kind == "vocal"]
 
+    def reference_tracks(self):
+        return [t for t in self.tracks if t.kind == "reference"]
+
+    def mix_tracks(self):
+        return [t for t in self.tracks if t.kind != "reference"]
+
     def find_clip(self, cid):
         for t in self.tracks:
             for c in t.clips:
@@ -219,7 +258,8 @@ class Project:
 
     @property
     def length(self):
-        return max((t.end for t in self.tracks), default=0)
+        return max((t.end for t in self.tracks if t.kind != "reference"), default=0) or \
+            max((t.end for t in self.tracks), default=0)
 
     # ------------------------------------------------------------- tempo grid
     def samples_per_beat(self):
@@ -282,7 +322,8 @@ class Project:
         clips = [(c.file_id, c.start, c.length, c.src_in, c.gain_db, c.fade_in, c.fade_out, c.muted)
                  for c in t.clips]
         fx = [] if t.fx_bypass else t.fx
-        blob = json.dumps([clips, fx, self.ctx() if any(e.get("enabled") for e in fx) else None, extra],
+        blob = json.dumps([clips, fx, self.ctx() if (any(e.get("enabled") for e in fx) or t.throws) else None,
+                           t.throws, extra],
                           sort_keys=True, default=str)
         return hashlib.sha1(blob.encode()).hexdigest()
 
@@ -292,8 +333,9 @@ class Project:
         for t in self.vocal_tracks():
             if t.mute:
                 continue
-            off, a = self.render_track(t, progress, cancel)
-            bus[off: off + len(a)] += a[: max(0, n - off)]
+            off, a = self.track_audio(t, progress, cancel)
+            seg = a[: max(0, n - off)]
+            bus[off: off + len(seg)] += seg
         return bus
 
     def render_track(self, t: Track, progress=None, cancel=None):
@@ -322,8 +364,107 @@ class Project:
             nz = np.flatnonzero(np.max(np.abs(y), axis=1) > 1e-5)
             end = (nz[-1] + 1) if len(nz) else len(dry)
             res = (off, to_stereo(y[: max(end, len(dry))]))
+        if t.throws and len(res[1]):
+            res = (res[0], self._apply_throws(t, res[0], res[1]))
         self._render_cache[t.id] = (key, res[0], res[1])
         return res
+
+    def _apply_throws(self, t: Track, off, y):
+        """Delay / reverb throws and reverse-reverb swells on chosen words (non-destructive)."""
+        sr = self.sr
+        tail = int(4.0 * sr)
+        out = np.vstack([y, np.zeros((tail, 2), np.float32)])
+        for th in t.throws:
+            a, b = int(th["start"]) - off, int(th["end"]) - off
+            a, b = max(0, a), min(len(y), b)
+            if b - a < 64:
+                continue
+            seg = dsp.apply_fade(y[a:b], int(0.005 * sr), int(0.02 * sr))
+            seg = np.vstack([seg, np.zeros((tail, 2), np.float32)])
+            g = float(dsp.db_to_lin(th.get("amount_db", 0.0)))
+            kind = th.get("kind", "delay")
+            if kind == "delay":
+                wet = dsp.delay(seg, sr, None, self.bpm, th.get("division", "1/4"), th.get("feedback", 0.45),
+                                1.0, True, 300, 7000, 10, wet_only=True)
+                out[a:a + len(wet)] += wet * g
+            elif kind == "reverb":
+                wet = dsp.reverb(seg, sr, th.get("decay_s", 2.8), 20, 0.4, 0.9, 1.3, 1.0, 300, 9000, wet_only=True)
+                out[a:a + len(wet)] += wet * g * 2.0
+            elif kind == "reverse":
+                rv = dsp.reverb(np.vstack([y[a:b][::-1], np.zeros((tail, 2), np.float32)]), sr, 2.2, 0, 0.4,
+                                0.9, 1.2, 1.0, 300, 9000, wet_only=True)[::-1]
+                swell = rv[: len(rv) - (b - a)] if len(rv) > (b - a) else rv
+                s0 = a - len(swell)
+                if s0 < 0:
+                    swell = swell[-s0:]
+                    s0 = 0
+                out[s0:s0 + len(swell)] += swell * g * 2.0
+        nz = np.flatnonzero(np.max(np.abs(out), axis=1) > 1e-5)
+        end = max(len(y), (nz[-1] + 1) if len(nz) else 0)
+        return out[:end].astype(np.float32)
+
+    @staticmethod
+    def automation_gain(points, start, n):
+        """Volume envelope (dB points) as linear gain for samples [start, start+n)."""
+        pts = sorted(points)
+        if not pts:
+            return None
+        xs = np.array([p[0] for p in pts], float)
+        ys = np.array([p[1] for p in pts], float)
+        idx = np.arange(start, start + n)
+        return dsp.db_to_lin(np.interp(idx, xs, ys)).astype(np.float32)
+
+    def track_audio(self, t: Track, progress=None, cancel=None):
+        """Final track audio = FX render + volume automation. -> (offset, stereo)"""
+        off, a = self.render_track(t, progress, cancel)
+        if not t.automation or not len(a):
+            return off, a
+        key = (self._render_cache.get(t.id, ("",))[0], json.dumps(sorted(t.automation)))
+        hit = self._final_cache.get(t.id)
+        if hit and hit[0] == key:
+            return off, hit[1]
+        g = self.automation_gain(t.automation, off, len(a))
+        out = a * g[:, None]
+        self._final_cache[t.id] = (key, out)
+        return off, out
+
+    # ------------------------------------------------------------- send buses
+    def send_contributors(self, name):
+        return [t for t in self.audible_tracks() if t.sends.get(name, -60.0) > -59.5 and t.clips]
+
+    def _send_key(self, name):
+        contrib = [(self._track_key(t), t.sends.get(name), json.dumps(sorted(t.automation)))
+                   for t in self.send_contributors(name)]
+        return hashlib.sha1(json.dumps([contrib, self.sends[name]["fx"], self.ctx()], sort_keys=True,
+                                       default=str).encode()).hexdigest()
+
+    def is_send_fresh(self, name):
+        hit = self._send_cache.get(name)
+        return bool(hit) and hit[0] == self._send_key(name)
+
+    def render_send(self, name, progress=None, cancel=None):
+        """Shared reverb / delay bus fed by every track's send level. -> (offset, stereo)"""
+        key = self._send_key(name)
+        hit = self._send_cache.get(name)
+        if hit and hit[0] == key:
+            return 0, hit[1]
+        contrib = self.send_contributors(name)
+        if not contrib:
+            res = np.zeros((0, 2), np.float32)
+        else:
+            n = self.length + int(FX_TAIL_S * self.sr)
+            bus = np.zeros((n, 2), np.float32)
+            for t in contrib:
+                off, a = self.track_audio(t, progress, cancel)
+                seg = a[: max(0, n - off)] * float(dsp.db_to_lin(t.sends[name]))
+                bus[off: off + len(seg)] += seg
+            res = process_chain(bus, self.sr, self.sends[name]["fx"], self.ctx(), None, cancel)
+        self._send_cache[name] = (key, res)
+        return 0, res
+
+    def send_strips(self):
+        return [dict(id=f"__send_{n}__", name=f"{n.title()} bus", volume_db=self.sends[n]["volume_db"],
+                     mute=self.sends[n]["mute"], send=n) for n in SEND_NAMES]
 
     def is_render_fresh(self, t: Track) -> bool:
         hit = self._render_cache.get(t.id)
@@ -337,21 +478,33 @@ class Project:
     def invalidate(self, t: Track | None = None):
         if t is None:
             self._render_cache.clear()
+            self._final_cache.clear()
+            self._send_cache.clear()
         else:
             self._render_cache.pop(t.id, None)
+            self._final_cache.pop(t.id, None)
 
     def audible_tracks(self):
-        solo = any(t.solo for t in self.tracks)
-        return [t for t in self.tracks if (t.solo if solo else not t.mute)]
+        mix = self.mix_tracks()
+        solo = any(t.solo for t in mix)
+        return [t for t in mix if (t.solo if solo else not t.mute)]
 
     def mixdown(self, start=0, end=None, master=True, progress=None, cancel=None, tracks=None):
         end = end or (self.length + int(FX_TAIL_S * self.sr))
         n = max(0, end - start)
         mix = np.zeros((n, 2), np.float32)
+        items = []
         for t in tracks if tracks is not None else self.audible_tracks():
-            off, a = self.render_track(t, progress, cancel)
-            gl, gr = dsp.pan_gains(t.pan)
-            g = dsp.db_to_lin(t.volume_db)
+            off, a = self.track_audio(t, progress, cancel)
+            items.append((off, a, t.volume_db, t.pan))
+        if tracks is None:
+            for st in self.send_strips():
+                if not st["mute"]:
+                    off, a = self.render_send(st["send"], progress, cancel)
+                    items.append((off, a, st["volume_db"], 0.0))
+        for off, a, vol, pan in items:
+            gl, gr = dsp.pan_gains(pan)
+            g = dsp.db_to_lin(vol)
             s0, s1 = max(off, start), min(off + len(a), end)
             if s1 <= s0:
                 continue
@@ -373,6 +526,7 @@ class Project:
             master_volume_db=self.master_volume_db, bpm=self.bpm, beat_offset_s=self.beat_offset_s,
             time_sig=self.time_sig, key_root=self.key_root, key_scale=self.key_scale, a4=self.a4,
             analysis=self.analysis, loop=self.loop, files=self.pool.files,
+            lyrics=self.lyrics, sends=self.sends,
         )
 
     def load_state(self, d):
@@ -384,6 +538,14 @@ class Project:
             if k in d:
                 setattr(self, k, d[k])
         self.analysis = d.get("analysis", {})
+        self.lyrics = {**default_lyrics(), **d.get("lyrics", {})}
+        sends = default_sends()
+        for n, v in (d.get("sends") or {}).items():
+            if n in sends:
+                sends[n].update({k: v[k] for k in ("volume_db", "mute") if k in v})
+                if v.get("fx") is not None:
+                    sends[n]["fx"] = [sanitize_instance(e) for e in v["fx"]]
+        self.sends = sends
         lp = d.get("loop")
         self.loop = tuple(lp) if lp else None
         self.pool.files.update(d.get("files", {}))
@@ -402,7 +564,7 @@ class Project:
         self.name = os.path.splitext(os.path.basename(path))[0]
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(self.to_dict(), fh, indent=1)
+            json.dump(self.to_dict(), fh, indent=1, default=_json_default)
         os.replace(tmp, path)
         self.saved_path = path
         self.dirty = False
@@ -430,7 +592,7 @@ class UndoStack:
     def _snap(self):
         d = self.project.to_dict()
         d.pop("files", None)
-        return copy.deepcopy(d)
+        return json.loads(json.dumps(d, default=_json_default))
 
     def push(self, label="Edit"):
         self.undo.append((label, self._snap()))
@@ -441,8 +603,10 @@ class UndoStack:
 
     def _restore(self, state):
         files = self.project.pool.files
+        lyrics = self.project.lyrics          # lyrics are edited live; undo never rewinds your writing
         self.project.load_state(state)
         self.project.pool.files = files
+        self.project.lyrics = lyrics
         self.project.invalidate()
 
     def do_undo(self):
@@ -536,7 +700,7 @@ def trim_to_range(project, tracks, start, end):
         delete_range(project, [t], end, max(end, t.end) + 1)
 
 
-def process_range(project: Project, track: Track, start, end, fn, label="Process", xfade_ms=5.0):
+def process_range(project: Project, track: Track, start, end, fn, label="Process", xfade_ms=5.0, pass_pos=False):
     """Destructively apply fn(audio)->audio to every clip region inside [start, end).
 
     A new source file is written per affected clip, so the original stays for undo.
@@ -553,7 +717,7 @@ def process_range(project: Project, track: Track, start, end, fn, label="Process
         b = c.src_in + (s1 - c.start)
         new_src = src.copy()
         seg = src[a:b]
-        out = dsp.as2d(fn(seg))
+        out = dsp.as2d(fn(seg, s0) if pass_pos else fn(seg))
         if out.shape[1] != new_src.shape[1]:
             if new_src.shape[1] == 1:
                 new_src = np.repeat(new_src, 2, axis=1)
@@ -579,7 +743,7 @@ def process_range(project: Project, track: Track, start, end, fn, label="Process
 
 def bounce_track(project: Project, track: Track, name=None):
     """Print the track's FX into a new audio clip (like Audition's Bounce to New Track)."""
-    off, a = project.render_track(track)
+    off, a = project.track_audio(track)
     t = project.add_track(name or f"{track.name} (bounced)", "vocal", track.role, style="Raw (no effects)",
                           index=project.tracks.index(track) + 1)
     t.volume_db, t.pan = track.volume_db, track.pan

@@ -15,7 +15,7 @@ from .. import APP_NAME, __version__
 from ..core import dsp, analysis, presets
 from ..core import pitch as pitch_mod
 from ..core.audio_io import save_audio, AUDIO_EXTENSIONS
-from ..core.project import (Project, PROJECT_EXT, default_projects_dir, delete_range, copy_range, paste,
+from ..core.project import (SEND_NAMES, Project, PROJECT_EXT, default_projects_dir, delete_range, copy_range, paste,
                             split_clip, split_at, trim_to_range, process_range, bounce_track, FX_TAIL_S, uid)
 from ..core.effects import process_chain, new_instance
 from ..core import audition
@@ -28,6 +28,7 @@ from .dialogs import AudioSettingsDialog, ExportDialog, AuditionDialog, NewProje
 from .audio_engine import AudioEngine
 from .widgets import LevelMeter, fmt_time
 from .workers import run_task
+from .features import FeatureMixin
 
 AUDIO_FILTER = "Audio (" + " ".join(f"*{e}" for e in AUDIO_EXTENSIONS) + ")"
 
@@ -55,7 +56,9 @@ SHORTCUTS = """<h3>Keyboard shortcuts</h3><table>
 <tr><td>Ctrl+Z / Ctrl+Y</td><td>Undo / redo</td></tr><tr><td>= / -</td><td>Zoom in / out</td></tr>
 <tr><td>F</td><td>Zoom to fit</td></tr><tr><td>Ctrl+wheel</td><td>Zoom at mouse</td></tr>
 <tr><td>Shift+wheel</td><td>Scroll sideways</td></tr><tr><td>Alt while dragging</td><td>Move without snapping</td></tr>
-<tr><td>Ctrl+M</td><td>Auto-Match vocals to beat</td></tr><tr><td>Ctrl+T</td><td>New vocal track</td></tr>
+<tr><td>Ctrl+M</td><td>Auto-Match vocals to beat</td></tr>
+<tr><td>Ctrl+L</td><td>Teleprompter</td></tr><tr><td>T</td><td>Tap-sync the next lyric line</td></tr>
+<tr><td>Ctrl+Shift+I</td><td>Import Adobe Audition session</td></tr><tr><td>Ctrl+T</td><td>New vocal track</td></tr>
 </table>"""
 
 TIPS = """<h3>Rap vocal tips</h3><ul>
@@ -71,7 +74,7 @@ No time? Track &gt; <i>Make instant double</i>.</li>
 <li>Master around -14 LUFS for streaming or -9 to -11 LUFS for a loud rap master, ceiling -1 dBTP.</li></ul>"""
 
 
-class MainWindow(QMainWindow):
+class MainWindow(FeatureMixin, QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
@@ -104,6 +107,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.breaths, "Breaths")
         self.tabs.addTab(self.pitch, "Pitch / Key")
         self.tabs.addTab(self.markers, "Markers")
+        self._init_features()
+        self._add_feature_tabs()
         self.right = QDockWidget("Inspector", self)
         self.right.setObjectName("inspector")
         self.right.setWidget(self.tabs)
@@ -242,6 +247,7 @@ class MainWindow(QMainWindow):
         self.a_automatch = A("Auto-Match vocals to beat", self._automatch, "Ctrl+M")
         self.a_analyze = A("Listen to beat (analyze key/BPM)", lambda: (self._show_tab(self.auto), self.auto.analyze()))
         self.a_settings = A("Audio settings…", self.audio_settings, "Ctrl+,")
+        self._feature_actions()
 
     def _build_menus(self):
         mb = self.menuBar()
@@ -313,6 +319,7 @@ class MainWindow(QMainWindow):
         sb = self._act("Show breath markers", lambda on: (setattr(self.state, "show_breaths", on), self.timeline.lanes.invalidate()), None, True)
         sb.setChecked(True)
         v.addAction(sb)
+        self._feature_menus(mb)
         h = mb.addMenu("&Help")
         h.addAction(self._act("Quick start", lambda: self._html("Quick start", QUICK_START), "F1"))
         h.addAction(self._act("Rap vocal tips", lambda: self._html("Tips", TIPS)))
@@ -374,6 +381,7 @@ class MainWindow(QMainWindow):
         btn("Snap", self.a_snap, "Snap to the beat grid")
         btn("A/B Dry", self.a_ab, "Hear the raw vocals without effects")
         btn("Master", self.a_master_prev, "Preview the master chain")
+        self._feature_transport(tb, btn)
         am = QToolButton()
         am.setText("✨ Auto-Match")
         am.setObjectName("primary")
@@ -614,8 +622,11 @@ class MainWindow(QMainWindow):
         run_task(job, done, self._error)
 
     def _dropped(self, files, track, pos):
-        files = [f for f in files if os.path.splitext(f)[1].lower() in AUDIO_EXTENSIONS + (PROJECT_EXT,)]
+        files = [f for f in files if os.path.splitext(f)[1].lower() in AUDIO_EXTENSIONS + (PROJECT_EXT, ".sesx")]
         if not files:
+            return
+        if files[0].lower().endswith(".sesx"):
+            self.import_audition(files[0])
             return
         if files[0].endswith(PROJECT_EXT):
             self.open_project(files[0])
@@ -688,8 +699,8 @@ class MainWindow(QMainWindow):
     def _prepare(self, then):
         p = self.state.project
         want_master = self.a_master_prev.isChecked() and not self.ab_dry
-        stale = [] if self.ab_dry else [t for t in p.tracks if t.clips and not p.is_render_fresh(t)]
-        if not stale and not want_master:
+        stale, stale_sends = self._stale_work()
+        if not stale and not stale_sends and not want_master:
             self._load_engine()
             then()
             return
@@ -700,6 +711,9 @@ class MainWindow(QMainWindow):
             for i, t in enumerate(stale):
                 task.report(f"Rendering {t.name} ({i + 1}/{len(stale)})…", i / max(len(stale), 1))
                 p.render_track(t, lambda n, f, s: task.report(f"Rendering {n}: {s}", f))
+            for n in stale_sends:
+                task.report(f"Rendering {n} bus…", 1.0)
+                p.render_send(n)
             mix = None
             if want_master:
                 task.report("Rendering master…", 1.0)
@@ -717,19 +731,6 @@ class MainWindow(QMainWindow):
             self._error(tb)
 
         run_task(job, done, err, lambda m, f: self.state.status.emit(m))
-
-    def _engine_tracks(self):
-        p = self.state.project
-        audible = p.audible_tracks()
-        out = []
-        for t in p.tracks:
-            if self.ab_dry:
-                off, data = p.render_track_dry(t)
-            else:
-                hit = p._render_cache.get(t.id)
-                off, data = (hit[1], hit[2]) if hit else p.render_track_dry(t)
-            out.append(dict(id=t.id, off=off, data=data, volume_db=t.volume_db, pan=t.pan, audible=t in audible))
-        return out
 
     def _load_engine(self, master_mix=None):
         p = self.state.project
@@ -749,8 +750,17 @@ class MainWindow(QMainWindow):
         e.monitor = self.a_monitor.isChecked()
         self.play_start = self.state.playhead
         try:
-            if record:
+            punch = self._punch_args() if record else None
+            if record and punch:
+                a, b, pre = punch
+                e.stop_at = b + int(0.5 * p.sr)
+                self.play_start = a
+                e.record(a, 0, punch_out=b, preroll=pre)
+                self.rec_btn.setChecked(True)
+                self.state.status.emit(f"Punch-in on {self.rec_track.name}: {fmt_time(a, p.sr)} - {fmt_time(b, p.sr)}")
+            elif record:
                 e.stop_at = None
+                e.rec_end = None
                 e.record(self.state.playhead, self.countin.currentIndex())
                 self.rec_btn.setChecked(True)
                 self.state.status.emit(f"Recording on {self.rec_track.name}…  (Space or R to stop)")
@@ -814,6 +824,7 @@ class MainWindow(QMainWindow):
             self.out_meter.set_levels([0, 0])
         self.in_meter.set_levels([e.peak_in])
         p = self.state.project
+        self._feature_tick()
         if p:
             self.time_lbl.setText(fmt_time(self.state.playhead, p.sr))
             bar, beat = p.bar_beat(self.state.playhead)
@@ -876,9 +887,9 @@ class MainWindow(QMainWindow):
         self.timeline.sync_headers()
         self.mixer.sync()
         if self.engine.playing:
-            aud = p.audible_tracks()
-            for t in p.tracks:
-                self.engine.update_track_params(t.id, t.volume_db, t.pan, t in aud)
+            self._send_params_to_engine()
+            if any(p.send_contributors(n) and not p.is_send_fresh(n) for n in SEND_NAMES):
+                self._rerender_timer.start()
             if self.engine.master_buffer is None:
                 self.engine.master_gain = float(dsp.db_to_lin(p.master_volume_db))
         p.dirty = True
@@ -897,8 +908,8 @@ class MainWindow(QMainWindow):
         if self.engine.master_buffer is not None:
             self.state.status.emit("Master preview is on - stop and play again to hear changes")
             return
-        stale = [t for t in p.tracks if t.clips and not p.is_render_fresh(t)]
-        if not stale:
+        stale, stale_sends = self._stale_work()
+        if not stale and not stale_sends:
             self.engine.set_tracks(self._engine_tracks())
             return
         if self._busy:
@@ -910,6 +921,9 @@ class MainWindow(QMainWindow):
             for t in stale:
                 task.report(f"Updating {t.name}…", 0)
                 p.render_track(t)
+            for n in stale_sends:
+                task.report(f"Updating {n} bus…", 0)
+                p.render_send(n)
             return True
 
         def done(_):
@@ -1437,7 +1451,7 @@ class MainWindow(QMainWindow):
                 for t in p.tracks:
                     for dry in ([False] if stems else []) + ([True] if dry_stems else []):
                         task.report(f"Stem {t.name}", 0.9)
-                        off, a = p.render_track_dry(t) if dry else p.render_track(t)
+                        off, a = p.render_track_dry(t) if dry else p.track_audio(t)
                         full = np.zeros((max(0, end - start), 2), np.float32)
                         s0, s1 = max(off, start), min(off + len(a), end)
                         if s1 > s0:

@@ -61,7 +61,7 @@ def cmd_mix(a):
     if a.stems:
         d = os.path.splitext(a.out)[0] + "_stems"
         for t in p.tracks:
-            off, y = p.render_track(t)
+            off, y = p.track_audio(t)
             full = __import__("numpy").zeros((p.length + len(y), 2), "float32")
             full[off:off + len(y)] = y
             save_audio(os.path.join(d, f"{t.name}.wav"), full[: max(p.length, off + len(y))], p.sr, 24)

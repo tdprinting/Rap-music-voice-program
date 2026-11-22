@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/sib.png" width="120" alt="SIB"></p>
+<p align="center"><img src="assets/logo.png" width="640" alt="SIB Studio Mixer"></p>
 
 # SIB Studio Mixer
 ### Shadows in the Booth Studio Mixer
@@ -15,6 +15,48 @@ It covers everything you'd normally open Adobe Audition for on a rap session, an
 **export a native Audition session (.sesx)** whenever you want to finish something in Audition.
 
 ---
+
+## New in 1.1
+- **Lyrics studio:** write in the app. Rhymes light up in colour as you type (end rhymes, internal rhymes, or
+  strict perfect rhymes). Every line shows its bar number and syllable count, with flow-density warnings.
+  Song templates, `{2}` for 2-bar lines, LRC/TXT import and export, and section markers on the timeline
+- **Rhyme finder:** 126,000-word offline dictionary with perfect rhymes, multis and slant rhymes, ranked by how
+  common the word is. Click any word in your lyrics to see its rhymes
+- **Teleprompter (Ctrl+L):** big-text lyrics that move with the beat while you record. The current line fills like
+  karaoke, upcoming lines are shown, it counts you in during the count-in, and it supports full screen on a
+  second monitor or tablet plus a mirror mode. **Tap-sync (T)** times each line exactly
+- **Ad-lib Creator and Library:**
+  - Save any selection as an ad-lib, optionally styled: ad-lib chain, phone, chipmunk, demon, octave stack,
+    reverse, stutter, delay throw or big reverb.
+  - Search, favourite, preview and insert ad-libs on any track, once or every 1/2/4 bars across a selection.
+  - Share packs between artists as zip files. The library starts with generated producer FX: riser, downlifter,
+    808 sub drop, impact, reverse swell and laser.
+- **Punch in/out:** record only over the selected range, with a 1-bar pre-roll
+- **Take Coach:** scores every take out of 100 (level, clipping, noise, timing on the beat, pitch drift, pops,
+  esses, breaths), says how to improve the next one, and uses the best take with one click
+- **Vocal editing:** strip silence into phrases; align doubles and stacks to the lead (VocAlign-style, phrase by
+  phrase); quantize phrases to the grid while keeping some human feel; spectral view with box-select repair
+  for coughs, squeaks and buzz
+- **Throws and creative edits:**
+  - Delay throws, reverb throws and reverse-reverb swells on chosen words (non-destructive).
+  - Stutter edits, tape stop and tape start, filter sweeps, and beat drops.
+- **Volume automation:** an envelope on every track (the **A** button), drawn right on the timeline
+- **Send buses:** a shared Reverb bus and Delay bus with per-track send levels and bus faders, so every vocal sits in the same space
+- **Reference track:** load a finished song and A/B it, loudness-matched, with the **REF** button. **Match EQ**
+  moves a vocal's tone, or the whole master, toward the reference
+- **Analyzer:** live spectrum with peak hold; momentary, short-term and integrated LUFS; peak and phase
+  correlation; and a **masking finder** that shows exactly where the beat buries the vocal and how to fix it
+- **Beat tools:** transpose the beat to fit your voice, change the beat's tempo without changing its key, and remove vocals from a beat (centre cancel)
+- **15 new effects** (46 total, 247 settings): graphic EQ, Match EQ, dynamic EQ (harshness tamer), transient
+  shaper, tube compressor, soft clipper, phaser, flanger, tremolo/gate-stutter/auto-pan, vocal enhancer,
+  bass & treble, notch, 808/bass enhancer, vocal remover, and wet-only modes for send buses
+- **Import Adobe Audition sessions (.sesx):**
+  - Brings in tracks, clips, fades, clip gain, volume, pan, mute and solo, plus tempo and markers.
+  - Effect racks, the track EQ, the master rack, and sends to reverb/delay buses come across too.
+  - Each Audition effect becomes its SIB equivalent with its settings mapped by name.
+  - Popular plug-ins (Auto-Tune, FabFilter, Waves, Valhalla, Soothe…) become the matching SIB effect.
+  - Effects with no SIB equivalent are kept as bypassed placeholders, and clip effects get their own track.
+  - A full import report lists every decision
 
 ## What it does
 
@@ -103,12 +145,18 @@ python -m sib_studio
 6. **Breaths** tab > *Detect* > review > *Apply* (if Auto-Match's automatic breath control isn't enough).
 7. **Ctrl+E** to export, or **Ctrl+Shift+A** to export to Audition.
 
+**Writing a new song?** Open the **Lyrics** tab, press *Loop 8* and write while the beat loops. Then
+**Ctrl+L** opens the teleprompter, and **R** records with the lyrics scrolling in front of you.
+
+**Coming from Audition?** Use **File > Import Adobe Audition session** (or drag a `.sesx` onto the window).
+
 Full guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md) · Every effect and setting: [docs/EFFECTS_REFERENCE.md](docs/EFFECTS_REFERENCE.md)
 
 ### Keyboard
 `Space` play/stop · `R` record · `L` loop · `S` split · `M` marker · `Del`/`Shift+Del` delete/ripple ·
 `Ctrl+X/C/V` · `Ctrl+D` duplicate · `Alt+←/→` nudge · `Ctrl+Z/Y` · `=`/`-`/`F` zoom · `Ctrl+M` Auto-Match ·
-`Ctrl+wheel` zoom · `Shift+wheel` scroll · `Shift+drag` on the ruler sets the loop
+`Ctrl+wheel` zoom · `Shift+wheel` scroll · `Shift+drag` on the ruler sets the loop ·
+`Ctrl+L` teleprompter · `T` tap-sync lyric line · `Ctrl+Shift+I` import Audition session
 
 ---
 
@@ -128,14 +176,20 @@ Originals are never modified; each edit writes a new file, which is what makes u
 ```
 sib_studio/
   core/            audio engine (no GUI): dsp, analysis, pitch (YIN + PSOLA tune), breath, effects registry,
-                   presets, project model + undo + editing, automatch, audition (.sesx), cli
-  gui/             PySide6 interface: main_window, timeline, fx_panel, panels, dialogs, audio_engine (record/play)
+                   presets, project model + undo + editing, automatch, audition (.sesx export),
+                   audition_import (.sesx import), lyrics (rhymes/syllables/LRC), adlibs, vocal_edit, coach, cli
+  data/            CMU pronouncing dictionary + word frequency list (offline rhymes)
+  gui/             PySide6 interface: main_window + features, timeline, fx_panel, panels, lyrics_panel,
+                   teleprompter, tool_panels (coach, ad-libs, analyzer, spectral), dialogs, audio_engine
 tests/             engine tests on synthetic audio (python -m pytest -q tests)
 ```
 
 ## Credits
 - **Tevin Dahl (Red Eyes)** and **Erik Lewis (Blue Eyes)**: creators
 - Built with numpy, SciPy, PySide6 (Qt), sounddevice (PortAudio) and soundfile (libsndfile)
+- Rhymes and syllables: the CMU Pronouncing Dictionary (Carnegie Mellon University, BSD-style licence, see
+  `sib_studio/data/CMUDICT_LICENSE.txt`). Word commonness: FrequencyWords by Hermit Dave (OpenSubtitles 2018),
+  CC BY-SA 4.0, see `sib_studio/data/WORD_FREQ_LICENSE.txt`
 - `.sesx` layout modelled on Audition CC sessions as documented by the open-source
   [audition-ses-to-sesx-converter](https://github.com/outhud/audition-ses-to-sesx-converter) (MIT)
 - Starting settings are based on published hip-hop mixing practice (iZotope, Sage Audio, MusicRadar, Antares, Sound On Sound guides on

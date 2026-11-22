@@ -92,7 +92,7 @@ class FXRack(QWidget):
         self._debounce.setInterval(350)
         self._debounce.timeout.connect(self._emit_modified)
         self._undo_pushed = False
-        state.selected_track_changed.connect(lambda *_: self.refresh())
+        state.selected_track_changed.connect(lambda *_: self._track_selected())
         state.project_replaced.connect(self.refresh)
         state.tracks_changed.connect(self.refresh)
         self._fill_presets()
@@ -105,6 +105,8 @@ class FXRack(QWidget):
             return None
         if self.target == "master":
             return p.master_fx
+        if self.target.startswith("send:"):
+            return p.sends[self.target[5:]]["fx"]
         t = p.track(self.state.current_track) if self.state.current_track else None
         return t.fx if t else None
 
@@ -128,6 +130,8 @@ class FXRack(QWidget):
         t = self._track()
         if self.target == "master":
             self.title.setText("Master bus")
+        elif self.target.startswith("send:"):
+            self.title.setText(f"{self.target[5:].title()} bus (shared send)")
         else:
             self.title.setText(t.name if t else "No track selected")
         if ch is not None:
@@ -169,6 +173,9 @@ class FXRack(QWidget):
         if self.target == "master":
             p.dirty = True
             self.state.track_modified.emit("__master__")
+        elif self.target.startswith("send:"):
+            p.dirty = True
+            self.state.track_modified.emit("__send__")
         else:
             t = self._track()
             if t:
@@ -204,7 +211,7 @@ class FXRack(QWidget):
         bl.addStretch(1)
         self.param_area.setWidget(box)
         self.desc.setText(d.description)
-        self.apply_btn.setEnabled(self.target != "master" and not d.needs_sidechain)
+        self.apply_btn.setEnabled(self.target == "track" and not d.needs_sidechain)
 
     def _param(self, inst, k, v):
         if inst["params"].get(k) == v:
@@ -336,6 +343,18 @@ class FXRack(QWidget):
 
     def _toggle_master(self, on):
         self.target = "master" if on else "track"
+        self.refresh()
+
+    def _track_selected(self):
+        if self.target.startswith("send:"):
+            self.target = "track"
+        self.refresh()
+
+    def edit_send(self, name):
+        self.master_btn.blockSignals(True)
+        self.master_btn.setChecked(False)
+        self.master_btn.blockSignals(False)
+        self.target = f"send:{name}"
         self.refresh()
 
     def _apply_destructive(self):

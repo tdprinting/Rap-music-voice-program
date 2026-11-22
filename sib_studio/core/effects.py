@@ -36,6 +36,7 @@ class Param:
     choices: list | None = None
     tip: str = ""
     log: bool = False             # log-scaled slider (frequencies)
+    # kind "hidden": stored data (e.g. a Match EQ curve) not shown as a control
 
 
 @dataclass
@@ -478,12 +479,13 @@ def _fx_tel(x, sr, p, ctx):
     P("ping_pong", "Ping-pong", "bool", True),
     P("low_cut", "Low cut", default=300.0, min=20, max=2000, step=5, unit="Hz", log=True),
     P("high_cut", "High cut", default=6000.0, min=1000, max=20000, step=50, unit="Hz", log=True),
+    P("wet_only", "Wet only (for send buses)", "bool", False),
 ], "Tempo-synced echoes, locked to the beat's BPM.", stereo_out=True)
 def _fx_delay(x, sr, p, ctx):
     bpm = ctx.get("bpm") or 90.0
     t = None if p["sync"] else p["time_ms"]
     return dsp.delay(x, sr, t, bpm, p["division"], p["feedback"] / 100.0, p["mix"] / 100.0,
-                     p["ping_pong"], p["low_cut"], p["high_cut"])
+                     p["ping_pong"], p["low_cut"], p["high_cut"], wet_only=p.get("wet_only", False))
 
 
 @register("reverb", "Reverb", "Space", [
@@ -498,13 +500,14 @@ def _fx_delay(x, sr, p, ctx):
     P("mix", "Mix", default=12.0, min=0, max=100, step=0.5, unit="%"),
     P("low_cut", "Low cut", default=250.0, min=20, max=1000, step=5, unit="Hz", log=True),
     P("high_cut", "High cut", default=9000.0, min=2000, max=20000, step=50, unit="Hz", log=True),
+    P("wet_only", "Wet only (for send buses)", "bool", False),
 ], "Plate/room/hall space for the vocal.", stereo_out=True)
 def _fx_rev(x, sr, p, ctx):
     pd = p["predelay_ms"]
     if p["sync_predelay"] and ctx.get("bpm"):
         pd = dsp.note_to_seconds(ctx["bpm"], "1/16") * 250.0  # 1/64 note in ms
     return dsp.reverb(x, sr, p["decay_s"], pd, p["damping"], p["size"], p["width"], p["mix"] / 100.0,
-                      p["low_cut"], p["high_cut"], p["early"])
+                      p["low_cut"], p["high_cut"], p["early"], wet_only=p.get("wet_only", False))
 
 
 @register("chorus", "Chorus", "Space", [
@@ -650,6 +653,179 @@ def _fx_master(x, sr, p, ctx):
             g += (p["target_lufs"] - got)
         y = dsp.limiter(y * dsp.db_to_lin(g), sr, p["ceiling_db"] - 0.3, 80.0)
     return y
+
+
+# ============================================================================ v1.1 effects
+@register("graphic_eq", "Graphic EQ (10-band)", "EQ & Filter",
+          [P(f"g{f}", f"{f if f < 1000 else str(f // 1000) + 'k'} Hz", default=0.0, min=-15, max=15, step=0.5, unit="dB")
+           for f in dsp.GRAPHIC_FREQS] + [P("q", "Band width (Q)", default=1.4, min=0.5, max=4, step=0.1)],
+          "Classic 10-band graphic EQ (31 Hz - 16 kHz).")
+def _fx_geq(x, sr, p, ctx):
+    return dsp.graphic_eq(x, sr, dsp.GRAPHIC_FREQS, [p[f"g{f}"] for f in dsp.GRAPHIC_FREQS], p["q"])
+
+
+@register("match_eq", "Match EQ (reference)", "EQ & Filter", [
+    P("amount", "Amount", default=70.0, min=0, max=100, step=1, unit="%",
+      tip="How far to move toward the reference's tone. 50-80% is usually plenty."),
+    P("curve", "curve", "hidden", []),
+    P("reference", "Reference", "hidden", ""),
+], "Moves the tone of this track toward a reference (set it from Mix > Match EQ to reference).")
+def _fx_match(x, sr, p, ctx):
+    curve = p.get("curve") or []
+    if not curve:
+        return x
+    g = [c * p["amount"] / 100.0 for c in curve]
+    return dsp.graphic_eq(x, sr, dsp.THIRD_OCTAVE[: len(g)], g, q=4.3)
+
+
+@register("dynamic_eq", "Dynamic EQ (harshness tamer)", "Dynamics", [
+    P("freq", "Frequency", default=3000.0, min=100, max=12000, step=10, unit="Hz", log=True,
+      tip="2.5-5 kHz tames harsh/shouty words; 200-400 Hz tames boomy ones."),
+    P("q", "Width (Q)", default=1.5, min=0.3, max=8, step=0.1),
+    P("threshold_db", "Threshold", default=-30.0, min=-60, max=0, step=0.5, unit="dB"),
+    P("max_cut_db", "Max cut", default=6.0, min=0, max=18, step=0.5, unit="dB"),
+    P("attack_ms", "Attack", default=5.0, min=0.5, max=100, step=0.5, unit="ms"),
+    P("release_ms", "Release", default=80.0, min=10, max=1000, step=5, unit="ms"),
+], "Cuts a frequency only when it gets too loud - keeps the vocal bright but never harsh.")
+def _fx_dyneq(x, sr, p, ctx):
+    return dsp.dynamic_eq(x, sr, p["freq"], p["q"], p["threshold_db"], p["max_cut_db"], p["attack_ms"], p["release_ms"])
+
+
+@register("transient", "Transient Shaper (punch)", "Dynamics", [
+    P("attack_db", "Attack", default=4.0, min=-12, max=12, step=0.5, unit="dB", tip="More = punchier consonants."),
+    P("sustain_db", "Sustain", default=0.0, min=-12, max=12, step=0.5, unit="dB", tip="Less = tighter, drier vocal."),
+    P("speed", "Speed", default=1.0, min=0.25, max=4, step=0.05),
+], "Adds punch to the start of words or tightens their tails.")
+def _fx_trans(x, sr, p, ctx):
+    return dsp.transient_shaper(x, sr, p["attack_db"], p["sustain_db"], p["speed"])
+
+
+@register("tube_comp", "Tube Compressor", "Dynamics", [
+    P("threshold_db", "Threshold", default=-18.0, min=-50, max=0, step=0.5, unit="dB"),
+    P("ratio", "Ratio", default=3.0, min=1, max=10, step=0.1),
+    P("attack_ms", "Attack", default=15.0, min=0.5, max=100, step=0.5, unit="ms"),
+    P("release_ms", "Release", default=120.0, min=10, max=1000, step=5, unit="ms"),
+    P("drive_db", "Tube drive", default=6.0, min=0, max=24, step=0.5, unit="dB"),
+    P("mix", "Mix", default=100.0, min=0, max=100, step=1, unit="%"),
+], "Warm compression with tube colour (like Audition's Tube-Modeled Compressor).")
+def _fx_tube(x, sr, p, ctx):
+    y = dsp.compressor(x, sr, p["threshold_db"], p["ratio"], p["attack_ms"], p["release_ms"], 8.0, 0, True)
+    y = dsp.saturation(y, sr, p["drive_db"], "tube", 0.5)
+    return _mix(dsp.as2d(x), y, p["mix"] / 100.0)
+
+
+@register("soft_clipper", "Soft Clipper (loudness)", "Master", [
+    P("drive_db", "Drive", default=3.0, min=0, max=18, step=0.25, unit="dB"),
+    P("ceiling_db", "Ceiling", default=-0.5, min=-6, max=0, step=0.1, unit="dBFS"),
+    P("mix", "Mix", default=100.0, min=0, max=100, step=1, unit="%"),
+], "Shaves peaks before the limiter for louder, punchier rap masters (and 808s that hit harder).")
+def _fx_clip(x, sr, p, ctx):
+    return dsp.soft_clipper(x, sr, p["drive_db"], p["ceiling_db"], p["mix"] / 100.0)
+
+
+@register("phaser", "Phaser", "Space", [
+    P("rate_hz", "Rate", default=0.5, min=0.05, max=8, step=0.05, unit="Hz"),
+    P("depth", "Depth", default=0.8, min=0, max=1, step=0.05),
+    P("stages", "Stages", "int", 4, 2, 12, 2),
+    P("fmin", "Low freq", default=300.0, min=50, max=2000, step=10, unit="Hz", log=True),
+    P("fmax", "High freq", default=3000.0, min=500, max=12000, step=50, unit="Hz", log=True),
+    P("feedback", "Feedback", default=0.3, min=0, max=0.9, step=0.05),
+    P("mix", "Mix", default=50.0, min=0, max=100, step=1, unit="%"),
+], "Sweeping, swirling phase effect - spacey ad-libs and intros.", stereo_out=True)
+def _fx_phaser(x, sr, p, ctx):
+    return dsp.phaser(x, sr, p["rate_hz"], p["depth"], int(p["stages"]), p["fmin"], p["fmax"], p["feedback"], p["mix"] / 100.0)
+
+
+@register("flanger", "Flanger", "Space", [
+    P("rate_hz", "Rate", default=0.25, min=0.02, max=5, step=0.01, unit="Hz"),
+    P("depth_ms", "Depth", default=2.0, min=0.1, max=10, step=0.1, unit="ms"),
+    P("delay_ms", "Delay", default=1.5, min=0.1, max=10, step=0.1, unit="ms"),
+    P("feedback", "Feedback", default=0.4, min=0, max=0.9, step=0.05),
+    P("mix", "Mix", default=50.0, min=0, max=100, step=1, unit="%"),
+], "Jet-plane whoosh.", stereo_out=True)
+def _fx_flanger(x, sr, p, ctx):
+    return dsp.flanger(x, sr, p["rate_hz"], p["depth_ms"], p["delay_ms"], p["feedback"], p["mix"] / 100.0)
+
+
+@register("tremolo", "Tremolo / Gate Stutter / Auto-Pan", "Space", [
+    P("mode", "Mode", "choice", "tremolo", choices=["tremolo", "auto-pan"]),
+    P("shape", "Shape", "choice", "square", choices=["sine", "triangle", "square"],
+      tip="Square + sync = the trap 'gate stutter' chop."),
+    P("sync", "Sync to BPM", "bool", True),
+    P("division", "Note", "choice", "1/16", choices=DIVISIONS),
+    P("rate_hz", "Rate (unsynced)", default=4.0, min=0.1, max=20, step=0.1, unit="Hz"),
+    P("depth", "Depth", default=0.8, min=0, max=1, step=0.05),
+], "Rhythmic volume chops or side-to-side movement locked to the beat.", stereo_out=True)
+def _fx_trem(x, sr, p, ctx):
+    bpm = ctx.get("bpm") if p["sync"] else None
+    return dsp.tremolo(x, sr, p["rate_hz"], p["depth"], p["shape"], p["mode"] == "auto-pan", bpm,
+                       p["division"] if p["sync"] else None)
+
+
+@register("vocal_enhancer", "Vocal Enhancer", "EQ & Filter", [
+    P("mode", "Voice", "choice", "low voice", choices=["low voice", "high voice", "music / beat"]),
+    P("amount", "Amount", default=60.0, min=0, max=100, step=1, unit="%"),
+], "One-knob clarity: removes boom and adds presence (like Audition's Vocal Enhancer).")
+def _fx_venh(x, sr, p, ctx):
+    a = p["amount"] / 100.0
+    if p["mode"] == "low voice":
+        b = [dict(type="highpass", freq=80, order=2), dict(type="peak", freq=250, gain=-4 * a, q=1.0),
+             dict(type="peak", freq=3200, gain=3 * a, q=0.9), dict(type="highshelf", freq=10000, gain=2 * a, q=0.7)]
+    elif p["mode"] == "high voice":
+        b = [dict(type="highpass", freq=120, order=2), dict(type="peak", freq=400, gain=-3 * a, q=1.0),
+             dict(type="peak", freq=5000, gain=-2 * a, q=2.0), dict(type="highshelf", freq=12000, gain=2.5 * a, q=0.7)]
+    else:
+        b = [dict(type="peak", freq=2500, gain=-3 * a, q=0.8)]
+    return dsp.eq_bands(x, sr, b)
+
+
+@register("tone", "Bass & Treble", "EQ & Filter", [
+    P("bass_db", "Bass", default=0.0, min=-15, max=15, step=0.5, unit="dB"),
+    P("bass_freq", "Bass freq", default=120.0, min=40, max=500, step=5, unit="Hz", log=True),
+    P("treble_db", "Treble", default=0.0, min=-15, max=15, step=0.5, unit="dB"),
+    P("treble_freq", "Treble freq", default=6000.0, min=1500, max=16000, step=50, unit="Hz", log=True),
+], "Simple tone controls.")
+def _fx_tone(x, sr, p, ctx):
+    return dsp.eq_bands(x, sr, [dict(type="lowshelf", freq=p["bass_freq"], gain=p["bass_db"], q=0.7),
+                                dict(type="highshelf", freq=p["treble_freq"], gain=p["treble_db"], q=0.7)])
+
+
+@register("notch", "Notch Filter", "EQ & Filter", [
+    P("f1", "Frequency 1", default=1000.0, min=20, max=20000, step=1, unit="Hz", log=True),
+    P("f2_on", "Notch 2 on", "bool", False),
+    P("f2", "Frequency 2", default=2000.0, min=20, max=20000, step=1, unit="Hz", log=True),
+    P("f3_on", "Notch 3 on", "bool", False),
+    P("f3", "Frequency 3", default=4000.0, min=20, max=20000, step=1, unit="Hz", log=True),
+    P("q", "Narrowness (Q)", default=12.0, min=1, max=60, step=0.5),
+], "Surgically removes whistles, ringing or a resonant room tone.")
+def _fx_notch(x, sr, p, ctx):
+    fs = [p["f1"]] + ([p["f2"]] if p["f2_on"] else []) + ([p["f3"]] if p["f3_on"] else [])
+    return dsp.sosfilt(np.vstack([dsp.biquad_sos("notch", f, sr, p["q"]) for f in fs]), x)
+
+
+@register("bass_enhancer", "808 / Bass Enhancer", "Color", [
+    P("freq", "Bass below", default=100.0, min=40, max=250, step=1, unit="Hz", log=True),
+    P("drive_db", "Drive", default=12.0, min=0, max=30, step=0.5, unit="dB"),
+    P("amount", "Amount", default=30.0, min=0, max=100, step=1, unit="%"),
+], "Adds harmonics to 808s and sub bass so they're heard on phones and laptop speakers.")
+def _fx_bass(x, sr, p, ctx):
+    return dsp.bass_enhancer(x, sr, p["freq"], p["drive_db"], p["amount"] / 100.0)
+
+
+@register("vocal_remover", "Vocal Remover (beat)", "Mix", [
+    P("keep_below_hz", "Keep bass below", default=150.0, min=40, max=400, step=5, unit="Hz", log=True),
+    P("amount", "Amount", default=100.0, min=0, max=100, step=1, unit="%"),
+], "Cancels a centred vocal in a beat that still has one (keeps the 808 and kick).")
+def _fx_vrem(x, sr, p, ctx):
+    return dsp.vocal_remover(x, sr, p["keep_below_hz"], p["amount"] / 100.0)
+
+
+@register("audition_fx", "Audition effect (imported)", "Utility", [
+    P("name", "Audition effect", "hidden", ""),
+    P("raw", "raw", "hidden", {}),
+], "An Adobe Audition effect with no SIB equivalent yet. Kept (bypassed) so the setting isn't lost.")
+def _fx_aud(x, sr, p, ctx):
+    return x
 
 
 def effect_names_by_category():

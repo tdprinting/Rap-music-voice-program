@@ -17,6 +17,8 @@ class StudioState(QObject):
     view_changed = Signal()
     status = Signal(str)
     undo_changed = Signal()
+    loop_bars_requested = Signal(int)
+    edit_send_requested = Signal(str)
 
     def __init__(self):
         super().__init__()

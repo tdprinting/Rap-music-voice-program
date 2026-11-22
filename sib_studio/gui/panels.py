@@ -545,6 +545,23 @@ class ChannelStrip(QFrame):
         self.lbl = QLabel(f"{self.fader.value() / 10:+.1f} dB")
         self.lbl.setAlignment(Qt.AlignCenter)
         lay.addWidget(self.lbl)
+        self.send_sl = {}
+        if track and track.kind != "reference":
+            for nm, lbl in (("reverb", "Rev"), ("delay", "Dly")):
+                r = QHBoxLayout()
+                cap = QLabel(lbl)
+                cap.setObjectName("muted")
+                cap.setFixedWidth(22)
+                sl = QSlider(Qt.Horizontal)
+                sl.setRange(-600, 60)
+                sl.setValue(int(track.sends.get(nm, -60.0) * 10))
+                sl.setToolTip(f"Send to the shared {nm} bus (far left = off)")
+                sl.valueChanged.connect(lambda v, nm=nm: self._send(nm, v))
+                sl.sliderReleased.connect(lambda: self.state.track_modified.emit("__send__"))
+                r.addWidget(cap)
+                r.addWidget(sl)
+                lay.addLayout(r)
+                self.send_sl[nm] = sl
         if track:
             b = QHBoxLayout()
             self.m = QToolButton(); self.m.setText("M"); self.m.setCheckable(True); self.m.setChecked(track.mute)
@@ -552,6 +569,12 @@ class ChannelStrip(QFrame):
             self.m.toggled.connect(self._mute); self.s.toggled.connect(self._solo)
             b.addWidget(self.m); b.addWidget(self.s)
             lay.addLayout(b)
+
+    def _send(self, nm, v):
+        self.track.sends[nm] = v / 10.0
+        self.state.project.dirty = True
+        if not any(sl.isSliderDown() for sl in self.send_sl.values()):
+            self.state.track_modified.emit("__send__")
 
     def _vol(self, v):
         self.lbl.setText(f"{v / 10:+.1f} dB")
@@ -573,6 +596,46 @@ class ChannelStrip(QFrame):
     def _solo(self, v):
         self.track.solo = v
         self.state.track_params.emit(self.track.id)
+
+
+class ReturnStrip(QFrame):
+    """Fader for a shared send bus (Reverb bus / Delay bus)."""
+
+    def __init__(self, state, name, parent=None):
+        super().__init__(parent)
+        self.state, self.name = state, name
+        self.setFixedWidth(92)
+        self.setStyleSheet(f"QFrame {{ background: #1f1a2b; border-radius: 6px; }}")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lbl = QLabel(f"{name.upper()}\nBUS")
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setStyleSheet("color: #b06cff; font-weight: 600;")
+        lay.addWidget(lbl)
+        cfg = state.project.sends[name]
+        self.fader = QSlider(Qt.Vertical)
+        self.fader.setRange(-600, 120)
+        self.fader.setValue(int(cfg["volume_db"] * 10))
+        self.fader.valueChanged.connect(self._vol)
+        lay.addWidget(self.fader, 1, Qt.AlignHCenter)
+        self.lbl = QLabel(f"{cfg['volume_db']:+.1f} dB")
+        self.lbl.setAlignment(Qt.AlignCenter)
+        lay.addWidget(self.lbl)
+        self.m = QToolButton(); self.m.setText("M"); self.m.setCheckable(True); self.m.setChecked(cfg["mute"])
+        self.m.toggled.connect(self._mute)
+        ed = QToolButton(); ed.setText("FX"); ed.setToolTip(f"Edit the {name} bus effect in the FX Rack")
+        ed.clicked.connect(lambda: self.state.edit_send_requested.emit(name))
+        b = QHBoxLayout(); b.addWidget(self.m); b.addWidget(ed)
+        lay.addLayout(b)
+
+    def _vol(self, v):
+        self.state.project.sends[self.name]["volume_db"] = v / 10
+        self.lbl.setText(f"{v / 10:+.1f} dB")
+        self.state.track_params.emit(f"__send_{self.name}__")
+
+    def _mute(self, v):
+        self.state.project.sends[self.name]["mute"] = v
+        self.state.track_params.emit(f"__send_{self.name}__")
 
 
 class MixerPanel(QWidget):
@@ -620,6 +683,8 @@ class MixerPanel(QWidget):
                 h.addWidget(s)
                 self.strips.append(s)
             h.addStretch(1)
+            for nm in ("reverb", "delay"):
+                h.addWidget(ReturnStrip(self.state, nm))
             self.master = ChannelStrip(self.state, None)
             h.addWidget(self.master)
         self.scroll.setWidget(w)

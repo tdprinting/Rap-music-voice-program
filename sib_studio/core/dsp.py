@@ -466,7 +466,7 @@ def make_reverb_ir(sr, decay_s=1.2, predelay_ms=25.0, damping=0.5, size=0.7, wid
 
 
 def reverb(x, sr, decay_s=1.2, predelay_ms=25.0, damping=0.5, size=0.7, width=1.0,
-           mix=0.15, low_cut=250.0, high_cut=9000.0, early=0.3, ir=None):
+           mix=0.15, low_cut=250.0, high_cut=9000.0, early=0.3, ir=None, wet_only=False):
     x = as2d(x)
     if x.shape[1] == 1:
         x = np.repeat(x, 2, axis=1)
@@ -476,6 +476,8 @@ def reverb(x, sr, decay_s=1.2, predelay_ms=25.0, damping=0.5, size=0.7, width=1.
     for c in range(2):
         wet[:, c] = signal.fftconvolve(src[:, c], ir[:, c])[: len(x)]
     wet *= 0.25
+    if wet_only:
+        return (wet * mix).astype(np.float32)
     return (x * (1 - mix * 0.5) + wet * mix).astype(np.float32)
 
 
@@ -487,7 +489,7 @@ def note_to_seconds(bpm: float, division: str) -> float:
 
 
 def delay(x, sr, time_ms=None, bpm=None, division="1/4", feedback=0.3, mix=0.15,
-          ping_pong=True, low_cut=300.0, high_cut=6000.0, repeats=8):
+          ping_pong=True, low_cut=300.0, high_cut=6000.0, repeats=8, wet_only=False):
     x = as2d(x)
     if x.shape[1] == 1:
         x = np.repeat(x, 2, axis=1)
@@ -509,6 +511,8 @@ def delay(x, sr, time_ms=None, bpm=None, division="1/4", feedback=0.3, mix=0.15,
             wet[off:] += seg * g
         g *= feedback
         tap = lowpass(tap, sr, high_cut * 0.9) if k < 4 else tap
+    if wet_only:
+        return (wet * mix).astype(np.float32)
     return (x + wet * mix).astype(np.float32)
 
 
@@ -653,3 +657,274 @@ def apply_fade(x, fade_in=0, fade_out=0, shape="log"):
         m = min(int(fade_out), n)
         x[n - m:] *= curve(m)[::-1, None]
     return x
+
+
+# --------------------------------------------------------------------------- v1.1 additions
+GRAPHIC_FREQS = [31, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+THIRD_OCTAVE = [25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250,
+                1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000]
+
+
+def graphic_eq(x, sr, freqs, gains, q=1.4):
+    bands = [dict(type="peak", freq=f, gain=g, q=q) for f, g in zip(freqs, gains) if f < sr * 0.45 and abs(g) > 0.05]
+    return eq_bands(x, sr, bands) if bands else as2d(x)
+
+
+def band_levels(x, sr, freqs=THIRD_OCTAVE):
+    """Average level per 1/3-octave band in dB (for Match EQ)."""
+    from scipy import signal as sg
+    mono = as2d(x).mean(axis=1)
+    n = 8192
+    if len(mono) < n:
+        mono = np.pad(mono, (0, n - len(mono)))
+    f, p = sg.welch(mono, fs=sr, nperseg=n)
+    out = []
+    for fc in freqs:
+        lo, hi = fc / 2 ** (1 / 6), fc * 2 ** (1 / 6)
+        m = (f >= lo) & (f < hi)
+        out.append(float(10 * np.log10(np.mean(p[m]) + 1e-20)) if np.any(m) else -120.0)
+    return np.array(out)
+
+
+def match_eq_curve(src, ref, sr, max_db=8.0, smooth=1):
+    """Gains (dB per 1/3-octave band) that move src's tonal balance toward ref's."""
+    a, b = band_levels(src, sr), band_levels(ref, sr)
+    diff = (b - b.mean()) - (a - a.mean())
+    valid = (a > -100) & (b > -100)
+    diff[~valid] = 0
+    if smooth:
+        k = np.ones(3) / 3
+        diff = np.convolve(np.pad(diff, 1, mode="edge"), k, mode="valid")
+    return np.clip(diff, -max_db, max_db).round(2).tolist()
+
+
+def time_varying_allpass(x1d, coeffs):
+    """First-order allpass with a per-sample coefficient array (used by the phaser)."""
+    y = np.empty_like(x1d)
+    xp = yp = 0.0
+    for i in range(len(x1d)):
+        a = coeffs[i]
+        v = -a * x1d[i] + xp + a * yp
+        xp, yp = x1d[i], v
+        y[i] = v
+    return y
+
+
+if njit is not None:  # pragma: no cover
+    time_varying_allpass = njit(cache=True)(time_varying_allpass)
+
+
+def phaser(x, sr, rate_hz=0.5, depth=0.8, stages=4, fmin=300.0, fmax=3000.0, feedback=0.3, mix=0.5):
+    x = as2d(x)
+    n = len(x)
+    t = np.arange(n) / sr
+    out = np.zeros_like(x)
+    for c in range(x.shape[1]):
+        lfo = 0.5 + 0.5 * np.sin(2 * np.pi * rate_hz * t + c * np.pi / 2)
+        fc = fmin * (fmax / fmin) ** (lfo * depth)
+        w = np.tan(np.pi * fc / sr)
+        a = ((w - 1) / (w + 1)).astype(np.float64)
+        y = x[:, c].astype(np.float64)
+        stage_in = y
+        for _ in range(int(stages)):
+            if njit is not None:
+                stage_in = time_varying_allpass(stage_in, a)
+            else:  # block-wise coefficient updates with scipy (no per-sample Python loop)
+                from scipy import signal as sg
+                B = 512
+                res = np.empty_like(stage_in)
+                zi = np.zeros(1)
+                for b0 in range(0, n, B):
+                    ab = float(a[b0])
+                    seg, zi = sg.lfilter([-ab, 1.0], [1.0, -ab], stage_in[b0:b0 + B], zi=zi)
+                    res[b0:b0 + B] = seg
+                stage_in = res
+        out[:, c] = (y * (1 - mix) + (y * 0.5 + stage_in * 0.5 + feedback * stage_in * 0.25) * mix)
+    return out.astype(np.float32)
+
+
+def flanger(x, sr, rate_hz=0.25, depth_ms=2.0, delay_ms=1.5, feedback=0.4, mix=0.5):
+    x = as2d(x)
+    t = np.arange(len(x)) / sr
+    out = np.zeros_like(x)
+    for c in range(x.shape[1]):
+        d = (delay_ms + depth_ms * (0.5 + 0.5 * np.sin(2 * np.pi * rate_hz * t + c * 0.5))) / 1000 * sr
+        y = _fractional_delay(x[:, c], d)
+        if feedback:
+            y = y + feedback * _fractional_delay(y, d)
+        out[:, c] = x[:, c] * (1 - mix * 0.5) + y * mix * 0.7
+    return out.astype(np.float32)
+
+
+def tremolo(x, sr, rate_hz=4.0, depth=0.8, shape="sine", autopan=False, bpm=None, division=None):
+    x = as2d(x)
+    if bpm and division:
+        rate_hz = 1.0 / note_to_seconds(bpm, division)
+    t = np.arange(len(x)) / sr
+    ph = 2 * np.pi * rate_hz * t
+    if shape == "square":
+        lfo = (np.sin(ph) >= 0).astype(np.float32)
+        lfo = uniform_filter1d(lfo, size=max(1, int(0.003 * sr)))
+    elif shape == "triangle":
+        lfo = 2 * np.abs(((rate_hz * t) % 1.0) - 0.5)
+    else:
+        lfo = 0.5 + 0.5 * np.sin(ph)
+    if autopan:
+        if x.shape[1] == 1:
+            x = np.repeat(x, 2, axis=1)
+        pan = (lfo * 2 - 1) * depth
+        p = (pan + 1) * np.pi / 4
+        return np.stack([x[:, 0] * np.cos(p) * np.sqrt(2), x[:, 1] * np.sin(p) * np.sqrt(2)], axis=1).astype(np.float32)
+    g = 1 - depth + depth * lfo
+    return (x * g[:, None]).astype(np.float32)
+
+
+def transient_shaper(x, sr, attack_db=4.0, sustain_db=0.0, speed=1.0):
+    x = as2d(x)
+    lv = np.max(np.abs(x), axis=1)
+    rate = sr
+    fast = lin_to_db(lv)
+    nb = int(np.ceil(len(lv) / CTRL_BLOCK))
+    pad = nb * CTRL_BLOCK - len(lv)
+    blk = lin_to_db(np.pad(lv, (0, pad)).reshape(nb, CTRL_BLOCK).max(axis=1))
+    r = sr / CTRL_BLOCK
+    f = smooth_gain_db(blk, r, 0.001 / speed, 0.03 / speed)
+    s = smooth_gain_db(blk, r, 0.03 / speed, 0.25 / speed)
+    diff = np.clip(f - s, 0, 24) / 24.0           # 0..1 how "transient" this moment is
+    gain = diff * attack_db + (1 - diff) * sustain_db * np.clip((blk + 60) / 60, 0, 1)
+    return (x * db_to_lin(expand_ctrl(gain, len(x)))[:, None]).astype(np.float32)
+
+
+def dynamic_eq(x, sr, freq=3000.0, q=1.5, threshold_db=-30.0, max_cut_db=6.0, attack_ms=5.0,
+               release_ms=80.0, boost=False):
+    """Band that only cuts (or boosts) when it gets loud - tames harshness without dulling."""
+    x = as2d(x)
+    band = sosfilt(biquad_sos("bandpass", freq, sr, q), x)
+    lv = block_level_db(np.max(np.abs(band), axis=1), mode="rms")
+    over = np.clip(lv - threshold_db, 0, None)
+    g = np.minimum(over * 0.6, max_cut_db)
+    g = smooth_gain_db(-g, sr / CTRL_BLOCK, attack_ms / 1000, release_ms / 1000)
+    g = expand_ctrl(g, len(x))
+    if boost:
+        g = -g
+    # apply as a variable-depth peak filter: blend between dry and a fully cut copy
+    full = eq_bands(x, sr, [dict(type="peak", freq=freq, gain=-max_cut_db if not boost else max_cut_db, q=q)])
+    depth = np.clip(np.abs(g) / max(max_cut_db, 1e-6), 0, 1)[:, None]
+    return (x + (full - x) * depth).astype(np.float32)
+
+
+def soft_clipper(x, sr, drive_db=3.0, ceiling_db=-0.5, mix=1.0):
+    x = as2d(x)
+    c = db_to_lin(ceiling_db)
+    d = db_to_lin(drive_db)
+
+    def clip(s):
+        s = s * d / c
+        return np.where(np.abs(s) < 0.5, s, np.sign(s) * (0.5 + 0.5 * np.tanh((np.abs(s) - 0.5) * 2))) * c
+    wet = np.clip(_oversampled(clip, x, 4), -c, c)
+    return (x * (1 - mix) + wet * mix).astype(np.float32)
+
+
+def bass_enhancer(x, sr, freq=100.0, drive_db=12.0, amount=0.3):
+    """808 / sub harmonics: makes low end audible on phones and laptops."""
+    x = as2d(x)
+    low = lowpass(x, sr, freq, order=4)
+    harm = np.tanh(low * db_to_lin(drive_db))
+    harm = highpass(lowpass(harm, sr, freq * 6, order=2), sr, freq * 1.5, order=2)
+    return (x + harm * amount).astype(np.float32)
+
+
+def vocal_remover(x, sr, keep_below_hz=150.0, amount=1.0):
+    """Centre-channel cancel for beats that still have a vocal (keeps the bass)."""
+    x = as2d(x)
+    if x.shape[1] < 2:
+        return x
+    low = lowpass(x, sr, keep_below_hz, order=4)
+    hi = x - low
+    side = (hi[:, 0] - hi[:, 1]) / 2
+    mid = (hi[:, 0] + hi[:, 1]) / 2 * (1 - amount)
+    return (low + np.stack([mid + side, mid - side], axis=1)).astype(np.float32)
+
+
+def tape_stop(x, sr, curve=2.0):
+    """Slows the audio to a halt over its length (beat-stop effect)."""
+    x = as2d(x)
+    n = len(x)
+    rate = (1 - np.linspace(0, 1, n)) ** max(curve, 0.1)
+    pos = np.cumsum(rate)
+    pos = pos - pos[0]
+    out = np.stack([np.interp(pos, np.arange(n), x[:, c]) for c in range(x.shape[1])], axis=1)
+    return apply_fade(out, 0, int(0.01 * sr)).astype(np.float32)
+
+
+def tape_start(x, sr, curve=2.0):
+    return tape_stop(x[::-1], sr, curve)[::-1].copy()
+
+
+def stutter(x, sr, bpm, division="1/16", fade_ms=3.0):
+    """Repeats the first slice (one note value) across the selection - trap stutter edit."""
+    x = as2d(x)
+    n = max(64, int(note_to_seconds(bpm, division) * sr))
+    if n >= len(x):
+        return x
+    chunk = apply_fade(x[:n], int(fade_ms / 1000 * sr), int(fade_ms / 1000 * sr), "linear")
+    reps = int(np.ceil(len(x) / n))
+    return np.tile(chunk, (reps, 1))[: len(x)].astype(np.float32)
+
+
+def filter_sweep(x, sr, kind="lowpass", f_start=18000.0, f_end=400.0, q=0.9, block=256):
+    """Time-varying filter across the selection (classic intro/drop sweep)."""
+    from scipy import signal as sg
+    x = as2d(x).astype(np.float64)
+    n = len(x)
+    out = np.zeros_like(x)
+    zi = None
+    nb = int(np.ceil(n / block))
+    for b in range(nb):
+        f = f_start * (f_end / f_start) ** (b / max(nb - 1, 1))
+        sos = biquad_sos(kind, f, sr, q)
+        if zi is None:
+            zi = np.zeros((sos.shape[0], 2, x.shape[1]))
+        seg = x[b * block:(b + 1) * block]
+        y, zi = sg.sosfilt(sos, seg, axis=0, zi=zi)
+        out[b * block:(b + 1) * block] = y
+    return out.astype(np.float32)
+
+
+def spectral_attenuate(x, sr, t0, t1, f0, f1, gain_db=-30.0, n_fft=2048, feather=2):
+    """Turn down a time x frequency box (Audition-style spectral repair).
+    t0/t1 in samples relative to x, f0/f1 in Hz."""
+    from scipy import signal as sg
+    x = as2d(x)
+    hop = n_fft // 4
+    out = np.zeros_like(x)
+    g = db_to_lin(gain_db)
+    for c in range(x.shape[1]):
+        f, t, Z = sg.stft(x[:, c], fs=sr, nperseg=n_fft, noverlap=n_fft - hop, boundary="even", padded=True)
+        ts = t * sr
+        mask = np.ones(Z.shape)
+        tm = (ts >= t0) & (ts <= t1)
+        fm = (f >= f0) & (f <= f1)
+        mask[np.ix_(fm, tm)] = g
+        if feather:
+            mask = uniform_filter1d(uniform_filter1d(mask, size=feather * 2 + 1, axis=0), size=feather * 2 + 1, axis=1)
+        _, y = sg.istft(Z * mask, fs=sr, nperseg=n_fft, noverlap=n_fft - hop, boundary=True)
+        out[:, c] = y[: len(x)] if len(y) >= len(x) else np.pad(y, (0, len(x) - len(y)))
+    return out.astype(np.float32)
+
+
+def spectrogram_db(x, sr, n_fft=1024, max_frames=2000):
+    from scipy import signal as sg
+    mono = as2d(x).mean(axis=1)
+    hop = max(n_fft // 4, int(len(mono) / max_frames) + 1)
+    f, t, Z = sg.stft(mono, fs=sr, nperseg=n_fft, noverlap=max(0, n_fft - hop))
+    return f, t, 20 * np.log10(np.abs(Z) + 1e-9)
+
+
+def correlation(x):
+    x = as2d(x)
+    if x.shape[1] < 2 or len(x) < 2:
+        return 1.0
+    l, r = x[:, 0], x[:, 1]
+    d = np.sqrt(np.sum(l * l) * np.sum(r * r))
+    return float(np.sum(l * r) / d) if d > 1e-12 else 1.0

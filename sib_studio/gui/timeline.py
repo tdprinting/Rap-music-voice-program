@@ -214,7 +214,7 @@ class TrackHeader(QFrame):
         self.name.setFrame(False)
         self.name.editingFinished.connect(self._rename)
         top.addWidget(self.name, 1)
-        self.kind = QLabel("BEAT" if track.kind == "beat" else track.role.upper())
+        self.kind = QLabel({"beat": "BEAT", "reference": "REF"}.get(track.kind, track.role.upper()))
         self.kind.setObjectName("muted")
         top.addWidget(self.kind)
         lay.addLayout(top)
@@ -236,6 +236,10 @@ class TrackHeader(QFrame):
             btns.addWidget(self.role, 1)
         self.fx = self._btn("FX", "Bypass all effects on this track (A/B)", not track.fx_bypass, self._fx)
         btns.addWidget(self.fx)
+        self.au = self._btn("A", "Volume automation: show/edit the envelope on this track\n"
+                                 "(click the lane to add points, drag to move, right-click a point to delete)",
+                            track.show_automation, self._auto)
+        btns.addWidget(self.au)
         btns.addStretch(0)
         lay.addLayout(btns)
         row = QHBoxLayout()
@@ -312,6 +316,12 @@ class TrackHeader(QFrame):
         self.vol.setValue(int(d.get("volume_db", 0) * 10))
         self.pan.setValue(int(d.get("pan", 0) * 100))
         self.kind.setText(r.upper())
+
+    def _auto(self, v):
+        self.track.show_automation = v
+        if v:
+            self.state.status.emit(f"Automation on '{self.track.name}': click the lane to add volume points")
+        self.state.view_changed.emit()
 
     def _fx(self, v):
         self.track.fx_bypass = not v
@@ -461,6 +471,21 @@ class Lanes(QWidget):
                     on = r[2] if len(r) > 2 else True
                     p.fillRect(QRectF(x0, ty + th - 14, max(2, x1 - x0), 10),
                                QColor(255, 159, 67, 200) if on else QColor(120, 120, 120, 120))
+            for th in t.throws:
+                x0, x1 = v.x_of(th["start"]), v.x_of(th["end"])
+                if x1 < 0 or x0 > w:
+                    continue
+                col = {"delay": QColor(176, 108, 255, 210), "reverb": QColor(46, 196, 182, 210),
+                       "reverse": QColor(255, 122, 168, 210)}.get(th.get("kind"), QColor(176, 108, 255, 210))
+                p.fillRect(QRectF(x0, ty + 16, max(3, x1 - x0), 6), col)
+                p.setPen(col)
+                p.setFont(QFont("Segoe UI", 7, QFont.Bold))
+                p.drawText(QPointF(x0 + 2, ty + 31), {"delay": "DLY THROW", "reverb": "VERB THROW",
+                                                      "reverse": "REV SWELL"}.get(th.get("kind"), "THROW"))
+            if t.kind == "reference":
+                p.fillRect(QRectF(0, ty, w, th), QColor(240, 180, 41, 18))
+            if t.automation or t.show_automation:
+                self._paint_automation(p, t, ty, th, w)
             # selection
             if self.state.has_range and (not self.state.sel_tracks or t.id in self.state.sel_tracks):
                 a, b = self.state.range()
@@ -474,6 +499,43 @@ class Lanes(QWidget):
             x = v.x_of(m.pos)
             p.setPen(QPen(QColor(240, 180, 41, 140), 1, Qt.DotLine))
             p.drawLine(QPointF(x, 0), QPointF(x, self.height()))
+
+    @staticmethod
+    def _db_to_y(db, ty, th):
+        return ty + 6 + (th - 12) * (1 - (min(max(db, -40.0), 6.0) + 40.0) / 46.0)
+
+    @staticmethod
+    def _y_to_db(y, ty, th):
+        return float(np.clip((1 - (y - ty - 6) / max(th - 12, 1)) * 46.0 - 40.0, -40.0, 6.0))
+
+    def _paint_automation(self, p, t, ty, th, w):
+        v = self.view
+        pts = sorted(t.automation)
+        col = QColor(240, 180, 41, 230 if t.show_automation else 110)
+        p.setPen(QPen(col, 1.6))
+        if not pts:
+            y = self._db_to_y(0.0, ty, th)
+            p.setPen(QPen(col, 1, Qt.DashLine))
+            p.drawLine(QPointF(0, y), QPointF(w, y))
+            return
+        path = QPainterPath()
+        path.moveTo(0, self._db_to_y(pts[0][1], ty, th))
+        for s_, db in pts:
+            path.lineTo(v.x_of(s_), self._db_to_y(db, ty, th))
+        path.lineTo(w, self._db_to_y(pts[-1][1], ty, th))
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(path)
+        if t.show_automation:
+            p.setBrush(col)
+            for s_, db in pts:
+                p.drawEllipse(QPointF(v.x_of(s_), self._db_to_y(db, ty, th)), 4, 4)
+            p.setBrush(Qt.NoBrush)
+
+    def _auto_point_at(self, t, ty, th, x, y):
+        for i, (s_, db) in enumerate(sorted(t.automation)):
+            if abs(self.view.x_of(s_) - x) < 7 and abs(self._db_to_y(db, ty, th) - y) < 7:
+                return i
+        return None
 
     def _paint_clip(self, p, t, c, ty, th, w):
         v = self.view
@@ -547,6 +609,25 @@ class Lanes(QWidget):
         t, c, zone = self.hit(x, y)
         if t is not None:
             self.state.set_current_track(t.id)
+        if t is not None and t.show_automation and not (e.modifiers() & Qt.ControlModifier):
+            _, ty, th = self.track_at(y)
+            t.automation = sorted([list(pt) for pt in t.automation])
+            i = self._auto_point_at(t, ty, th, x, y)
+            if e.button() == Qt.RightButton:
+                if i is not None:
+                    self.state.push_undo("Delete automation point")
+                    t.automation.pop(i)
+                    self.state.modified([t.id])
+                return
+            if e.button() == Qt.LeftButton:
+                self.state.push_undo("Automation")
+                if i is None:
+                    t.automation.append([int(self.view.s_of(x)), self._y_to_db(y, ty, th)])
+                    t.automation.sort()
+                    i = self._auto_point_at(t, ty, th, x, y)
+                self._drag = dict(mode="auto", track=t, idx=i, ty=ty, th=th, started=True, x0=x, moving=[])
+                self.invalidate()
+                return
         if e.button() == Qt.RightButton:
             if self.context_menu_cb:
                 self.context_menu_cb(e.globalPosition().toPoint(), t, c, self.view.s_of(x))
@@ -604,6 +685,12 @@ class Lanes(QWidget):
                 self.state.push_undo({"body": "Move clip", "left": "Trim clip", "right": "Trim clip"}.get(d["mode"], "Fade"))
         s = self.view.s_of(x)
         proj = self.state.project
+        if d["mode"] == "auto":
+            t = d["track"]
+            if d["idx"] is not None and d["idx"] < len(t.automation):
+                t.automation[d["idx"]] = [max(0, int(s)), self._y_to_db(y, d["ty"], d["th"])]
+                self.invalidate()
+            return
         if d["mode"] == "select":
             self.state.sel_end = self._snap(s) if self.state.snap else s
             t, _, _ = self.track_at(y)
@@ -647,6 +734,10 @@ class Lanes(QWidget):
         d = self._drag
         self._drag = None
         if d is None:
+            return
+        if d["mode"] == "auto":
+            d["track"].automation.sort()
+            self.state.modified([d["track"].id])
             return
         if d["mode"] == "select":
             if not d["started"] and not (e.modifiers() & Qt.ShiftModifier):

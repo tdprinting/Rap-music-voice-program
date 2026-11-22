@@ -7,7 +7,7 @@
 |---|---|
 | **Transport bar** (top) | ⏮ start · ▶ play/stop · ● REC · ⟲ Loop · ♩ Click (metronome) · Count-in · 🎧 Monitor · time / bar.beat · key · BPM · tuning · Snap · A/B Dry · Master preview · ✨ Auto-Match · IN/OUT meters |
 | **Timeline** (centre) | Ruler (bars + time, loop, markers) · track headers (name, role, M/S/●, FX bypass, volume, pan) · clips with waveforms, fades, takes, breath markers (orange) |
-| **Inspector** (right) | Tabs: **Auto-Match · FX Rack · Breaths · Pitch / Key · Markers** |
+| **Inspector** (right) | Tabs: **Auto-Match · FX Rack · Lyrics · Ad-libs · Breaths · Pitch / Key · Markers · Take Coach · Spectral · Analyzer** |
 | **Mixer** (View > Mixer) | Faders, pan, mute/solo for every track + master with meter |
 
 ## 2. Recording over a beat
@@ -110,3 +110,118 @@ ambiguous harmony).
 | Auto-tune sounds wrong | Check the key in Auto-Match; try an alternative key; check the beat's tuning (A4); raise retune speed / Flex-Tune for natural sound |
 | Vocal buried | Raise *Vocal level vs beat*, enable Beat Carve, raise EQ presence |
 | Esses too harsh / lispy | De-esser *Threshold offset* down (more) or *Max reduction* down (less) |
+
+
+---
+
+# New in 1.1
+
+## 11. Lyrics & teleprompter
+**Writing.** Open the **Lyrics** tab. Write one line per bar. Section headers like `[Verse 1]` or `Hook:` turn blue.
+Start a line with `{2}` if it spans 2 bars.
+- Rhyming words are coloured by sound. *Rhymes*: **end** (last word of each line), **all** (internal rhymes too),
+  **strict end** (perfect rhymes only).
+- The gutter shows each line's **bar** and **syllable count**. The count turns yellow at 13+ and red at 17+, where
+  it's hard to fit at most tempos. The status line shows syllables/bar and syllables/second at the beat's BPM.
+- **Rhyme finder:** type a word or click one in your lyrics. Tabs show **Perfect** (cat/hat), **Multis**
+  (fire/higher/buyer, which match the last two vowel sounds) and **Slant** (time/mind/right). Double-click a word
+  to insert it.
+- **Templates:** 16-bar verse, 8-bar hook, full song layouts.
+- **Loop 4 / 8 / 16:** loops that many bars from the playhead so you can write over the beat.
+- *File ▾*: import/export `.txt`, export synced `.lrc` (used by streaming lyrics services), and add section
+  markers to the timeline.
+
+**Placing lyrics on the beat.** Set **Start bar** (or click *= playhead*) and **Bars/line**. For exact timing,
+turn on **⏱ Tap-sync**, play the beat and press **T** right as each line starts. Synced lines show ⏱ in the gutter.
+
+**Teleprompter** (*Ctrl+L*, or the 🎤 Prompter button):
+- The current line is big and fills red→blue as the bar plays. The next lines and the previous line are shown.
+- Bar/beat lights, a "starts in" timer, and a big countdown during the count-in.
+- Drag the window to a second monitor or tablet. **F11** or double-click = full screen, **+/-** or mouse wheel =
+  text size, **M** = mirror (for teleprompter glass), **Esc** = close.
+- **Space**, **R** and **T** still control the studio while the teleprompter has focus.
+
+## 12. Punch in / out
+Select the range to fix on the vocal track, turn on **Punch** in the transport bar, and press **R**. Playback starts
+1 bar early so you catch the flow. Recording only happens inside the selection, then it stops by itself.
+The new take goes on top (older takes stay underneath for comping).
+
+## 13. Ad-lib Creator & Library (Ad-libs tab)
+1. Drag over an ad-lib on a vocal track (or click its clip) > **Save selection as ad-lib** (or *Vocal > Save
+   selection as ad-lib*).
+2. Name it, pick a category (Hype, Yeah/Uh/Ay, Laughs, Shouts, Whispers, Signature tag, Producer tag…) and a
+   **style** to print in: Ad-lib chain, Phone/radio, Pitch up (chipmunk), Pitch down (demon), Octave stack,
+   Reverse, Stutter, Delay throw, Big reverb. Silence is trimmed and the level normalised.
+3. Inserting: select it in the library, then **Insert** (or double-click). It goes to the selected vocal track,
+   or the Ad-libs track if you're on the beat. Options: *Once at playhead*, *Every bar / 2 bars / 4 bars in the
+   selection*, snap to beat, or a new ad-lib track.
+4. Use ★ to favourite, ✎ to rename, 🗑 to delete, ▶ to preview (*auto* previews as you scroll).
+5. **Export pack / Import pack** zips the library so Red Eyes and Blue Eyes can share ad-libs and producer tags.
+
+The library lives in `%APPDATA%\SIB Studio Mixer\adlibs` and starts with generated producer FX (riser,
+downlifter, 808 sub drop, impact, reverse swell, laser).
+
+## 14. Take Coach
+Select a track > **Rate takes**. Each clip/take is scored out of 100 and ranked 🥇🥈🥉. Click one to see tips and
+details: peak level, clipping, voice vs noise, level swings, timing off the grid (ms), syllables per second,
+pitch drift, pops, esses, breaths per minute. **Use best take** brings the winner to the front.
+
+## 15. Vocal editing tools (Vocal menu)
+| Tool | What it does |
+|---|---|
+| Strip silence | Splits clips into phrases and removes the silence between them (non-destructive) |
+| Align to lead | Moves each phrase of a double/stack/harmony so its consonants line up with the Lead track |
+| Quantize phrases | Pulls the start of each phrase toward the 1/16, 1/8, 1/4 or 1/8-triplet grid. *Strength* keeps some human feel |
+| Delay / reverb throw | The selected word(s) echo on the beat, or bloom into a big space. Shows as a coloured bar on the clip |
+| Reverse-reverb swell | A reversed reverb that "sucks in" to the selected word |
+| Remove throws | Clears throws inside the selection |
+
+**Process menu additions:** stutter edit (1/16 or 1/8), tape stop, tape start, filter sweep down/up.
+**Spectral tab:** *Show spectrum* for the selected clip/range. Drag a box around a noise (cough, chair, phone
+buzz, harsh S) and choose *Apply to box* to turn just that region down.
+
+## 16. Automation
+Click **A** on a track header. Click the lane to add volume points, drag them, and right-click a point to delete
+it. Hold Ctrl to edit clips while automation is shown. Use it to ride the beat down for a spoken intro, push a
+line up, or fade an outro.
+
+## 17. Send buses & mixing
+- **Mixer** (View > Mixer, or Mix > Mixer): each strip has **Rev** and **Dly** send sliders (far left = off).
+  The **Reverb bus** and **Delay bus** strips have their own fader, mute and **FX** button, which edits the bus
+  effect in the FX Rack.
+- Quick setups: *Mix > Send all vocals to Reverb bus* and *Send ad-libs to Delay bus*.
+- Using one shared reverb for all the vocals makes lead, doubles and ad-libs sound like one performance in one
+  room.
+
+## 18. Reference track, Match EQ & Analyzer
+- *Mix > Import reference track* loads a finished song you like (excluded from exports). **REF** in the transport
+  flips playback to it, loudness-matched to your mix, so you compare tone and balance rather than volume.
+- *Mix > Match selected track's tone to reference* (use an acapella reference for vocals) or *Match master to
+  reference track* adds a **Match EQ** at 70%. Adjust *Amount* in the FX Rack.
+- **Analyzer tab:** live spectrum with peak hold; LUFS (momentary / short-term / integrated); peak (red near
+  0 dB); phase correlation (red when negative, which means mono problems). **Find where beat and vocals clash**
+  overlays the beat (red) and vocals (blue) and shades the clash zones, then tells you where to put Beat Carve or
+  an EQ boost.
+
+## 19. Beat tools (Mix menu)
+- **Transpose beat** ±6 semitones to fit the beat to your voice. The project key follows, so SIB Tune stays correct.
+- **Change beat tempo** time-stretches the beat to a new BPM without changing its key.
+- **Beat drop on selection** cuts the beat out under a line (the classic drop before the hook).
+- **Remove vocals from beat** adds a centre-cancel Vocal Remover for beats that still have a vocal on them.
+
+## 20. Importing Adobe Audition sessions
+*File > Import Adobe Audition session (.sesx)*, Ctrl+Shift+I, or drag the `.sesx` onto SIB.
+
+| Comes across | How |
+|---|---|
+| Tracks, clip positions, source in/out, clip gain, clip mute, fades | Exactly |
+| Track volume, pan, mute, solo; tempo, time signature; markers | Exactly |
+| Media files | Found by relative path, absolute path, or by searching the session folder |
+| Track effect racks, the track EQ, the master rack | Each effect becomes its SIB equivalent, with settings mapped by name. Audition stores settings normalised, so treat them as close starting points |
+| Clip effects | The clip moves to its own "(clip FX)" track with those effects plus the track's effects |
+| Sends to reverb/delay buses | Mapped onto SIB's shared Reverb/Delay bus with the bus's reverb/delay settings |
+| Plug-ins (Auto-Tune, Melodyne, FabFilter Pro-Q/C/L/DS, Waves, Valhalla, EchoBoy, Decapitator, Ozone, RX, Soothe…) | Replaced by the matching SIB effect with default settings (plug-in settings are private to the plug-in) |
+| Anything else | Kept as a bypassed "Audition effect (imported)" placeholder so nothing disappears silently |
+
+Afterwards an **import report** lists every track, clip count, effect mapping, missing file and skipped item. The
+imported project is saved as a new SIB project. Your original Audition session is never changed.

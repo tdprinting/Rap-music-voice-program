@@ -150,7 +150,7 @@ python -m sib_studio
 
 **Coming from Audition?** Use **File > Import Adobe Audition session** (or drag a `.sesx` onto the window).
 
-Full guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md) · Every effect and setting: [docs/EFFECTS_REFERENCE.md](docs/EFFECTS_REFERENCE.md)
+Full guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md) · Project handoff: [docs/HANDOFF.md](docs/HANDOFF.md) · Every effect and setting: [docs/EFFECTS_REFERENCE.md](docs/EFFECTS_REFERENCE.md)
 
 ### Keyboard
 `Space` play/stop · `R` record · `L` loop · `S` split · `M` marker · `Del`/`Shift+Del` delete/ripple ·
